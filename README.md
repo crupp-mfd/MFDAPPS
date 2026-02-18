@@ -46,6 +46,7 @@ Ziel:
 - Push auf `dev/ali`, `dev/timo`, `dev/christian` erstellt/aktualisiert automatisch eine PR nach `main`.
 - Auto-Merge wird aktiviert; nach gruener PR-Checks wird gemerged.
 - Nach Merge auf `main` startet automatisch Deploy nach `mfd-automation`.
+- Bei direktem Push auf `main` startet der Deploy ebenfalls automatisch.
 
 Einmalige GitHub-Einstellungen (UI):
 
