@@ -133,3 +133,4 @@ Standard ohne Argument ist `restart`, also:
 ```bash
 ./scripts/server.sh
 ```
+
