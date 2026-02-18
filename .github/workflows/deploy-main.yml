@@ -1,9 +1,9 @@
-name: Deploy Main to mfd-automation
+name: Deploy Push to mfd-automation
 
 on:
   push:
     branches:
-      - main
+      - '**'
   workflow_dispatch:
 
 permissions:
