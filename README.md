@@ -47,6 +47,7 @@ Ziel:
 - Auto-Merge wird aktiviert; nach gruener PR-Checks wird gemerged.
 - Nach Merge auf `main` startet automatisch Deploy nach `mfd-automation`.
 - Bei direktem Push auf `main` startet der Deploy ebenfalls automatisch.
+- Required status check fuer Merge nach `main`: `validate`.
 
 Einmalige GitHub-Einstellungen (UI):
 
@@ -133,4 +134,3 @@ Standard ohne Argument ist `restart`, also:
 ```bash
 ./scripts/server.sh
 ```
-
