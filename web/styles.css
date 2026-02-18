@@ -117,7 +117,7 @@ body {
   position: absolute;
   bottom: 9.8vh;
   left: 100%;
-  width: min(620px, 94vw);
+  width: min(1180px, 195vw);
   height: 130px;
   animation: moveTrain 12s linear infinite;
 }
@@ -168,7 +168,6 @@ body {
 
 .coupler {
   position: absolute;
-  left: 206px;
   bottom: 58px;
   width: 34px;
   height: 6px;
@@ -178,15 +177,38 @@ body {
 
 .wagon {
   position: absolute;
-  right: 20px;
   bottom: 28px;
-  width: 360px;
+  width: 280px;
   height: 92px;
   border-radius: 8px;
   background: linear-gradient(145deg, #8f3d3d, var(--wagon));
   border: 4px solid #582424;
   display: grid;
   place-items: center;
+}
+
+.coupler-1 {
+  left: 214px;
+}
+
+.coupler-2 {
+  left: 528px;
+}
+
+.coupler-3 {
+  left: 842px;
+}
+
+.wagon-1 {
+  left: 248px;
+}
+
+.wagon-2 {
+  left: 562px;
+}
+
+.wagon-3 {
+  left: 876px;
 }
 
 .banner {
@@ -247,12 +269,28 @@ body {
   left: 142px;
 }
 
-.wagon-wheel-1 {
-  right: 248px;
+.wagon1-wheel-1 {
+  left: 286px;
 }
 
-.wagon-wheel-2 {
-  right: 72px;
+.wagon1-wheel-2 {
+  left: 458px;
+}
+
+.wagon2-wheel-1 {
+  left: 600px;
+}
+
+.wagon2-wheel-2 {
+  left: 772px;
+}
+
+.wagon3-wheel-1 {
+  left: 914px;
+}
+
+.wagon3-wheel-2 {
+  left: 1086px;
 }
 
 @keyframes moveTrain {
@@ -268,6 +306,7 @@ body {
   .train {
     height: 112px;
     animation-duration: 10s;
+    width: 960px;
   }
 
   .locomotive {
@@ -281,15 +320,34 @@ body {
     width: 48px;
   }
 
-  .coupler {
-    left: 156px;
+  .coupler-1 {
+    left: 154px;
+  }
+
+  .coupler-2 {
+    left: 392px;
+  }
+
+  .coupler-3 {
+    left: 630px;
   }
 
   .wagon {
-    right: 10px;
     bottom: 24px;
-    width: min(230px, 56vw);
+    width: 206px;
     height: 82px;
+  }
+
+  .wagon-1 {
+    left: 188px;
+  }
+
+  .wagon-2 {
+    left: 426px;
+  }
+
+  .wagon-3 {
+    left: 664px;
   }
 
   .banner {
@@ -314,11 +372,27 @@ body {
     left: 96px;
   }
 
-  .wagon-wheel-1 {
-    right: 150px;
+  .wagon1-wheel-1 {
+    left: 210px;
   }
 
-  .wagon-wheel-2 {
-    right: 36px;
+  .wagon1-wheel-2 {
+    left: 340px;
+  }
+
+  .wagon2-wheel-1 {
+    left: 448px;
+  }
+
+  .wagon2-wheel-2 {
+    left: 578px;
+  }
+
+  .wagon3-wheel-1 {
+    left: 686px;
+  }
+
+  .wagon3-wheel-2 {
+    left: 816px;
   }
 }
