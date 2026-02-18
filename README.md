@@ -35,7 +35,7 @@ Regel:
 Workflow:
 
 - `/Users/crupp/dev/MFDAPPS/.github/workflows/deploy-main.yml`
-- Trigger: Push auf jeden Branch (und manuell via `workflow_dispatch`)
+- Trigger: Push auf `main` (und manuell via `workflow_dispatch`)
 - `/Users/crupp/dev/MFDAPPS/.github/workflows/dev-pr-automerge.yml`
 - `/Users/crupp/dev/MFDAPPS/.github/workflows/pr-checks.yml`
 
@@ -45,7 +45,8 @@ Ziel:
 
 - Push auf `dev/ali`, `dev/timo`, `dev/christian` erstellt/aktualisiert automatisch eine PR nach `main`.
 - Auto-Merge wird aktiviert; nach gruener PR-Checks wird gemerged.
-- Jeder Push auf einen Branch startet automatisch Deploy nach `mfd-automation`.
+- Push auf `dev/*` wird automatisch per PR nach `main` gemerged.
+- Nach dem Merge/Push auf `main` startet automatisch Deploy nach `mfd-automation`.
 - Required status check fuer Merge nach `main`: `validate`.
 
 Einmalige GitHub-Einstellungen (UI):

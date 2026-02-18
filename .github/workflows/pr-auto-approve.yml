@@ -1,0 +1,23 @@
+name: PR Auto-Approve (dev -> main)
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+permissions:
+  pull-requests: write
+
+jobs:
+  auto-approve:
+    if: startsWith(github.head_ref, 'dev/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Auto approve dev PR
+        uses: hmarr/auto-approve-action@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
