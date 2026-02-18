@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AppMehrkilometer</title>
+    <script src="/api-config.js"></script>
+    <style>
+      :root {
+        --bg: #f3f6fb;
+        --panel: #ffffff;
+        --border: #d7dfec;
+        --text: #122033;
+        --muted: #4a5d78;
+        --brand: #0f4a8a;
+        --ok: #1e8a47;
+        --warn: #b85f00;
+      }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      main {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 28px 18px 40px;
+      }
+      h1 {
+        margin: 0 0 8px;
+      }
+      p {
+        margin: 0 0 14px;
+        line-height: 1.45;
+        color: var(--muted);
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px;
+        margin-top: 14px;
+      }
+      .grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      }
+      .title {
+        font-size: 13px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .file-name {
+        font-weight: 700;
+        word-break: break-word;
+      }
+      .missing {
+        color: var(--warn);
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      input[type="number"] {
+        width: 110px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px;
+      }
+      button {
+        border: 0;
+        border-radius: 8px;
+        padding: 9px 14px;
+        background: var(--brand);
+        color: #fff;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      a {
+        color: var(--brand);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      .status {
+        margin-top: 10px;
+        font-size: 14px;
+      }
+      .status.ok {
+        color: var(--ok);
+      }
+      .status.warn {
+        color: var(--warn);
+      }
+      .status.err {
+        color: #b00020;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>AppMehrkilometer</h1>
+      <p>Quelle prüfen, Abrechnung erzeugen und Dateien herunterladen.</p>
+
+      <section class="panel">
+        <div class="row">
+          <label for="yearInput">Abrechnungsjahr:</label>
+          <input id="yearInput" type="number" min="2000" max="3000" />
+          <button id="refreshBtn" type="button">Dateien aktualisieren</button>
+          <button id="createBtn" type="button">Abrechnung erstellen</button>
+          <button id="createSpecialBtn" type="button">Spezial: Grampet/Railcare/Raildox</button>
+        </div>
+        <div id="status" class="status"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Quelldateien</h2>
+        <div class="grid">
+          <div>
+            <div class="title">Übersicht</div>
+            <div id="sourceOverviewName" class="file-name missing">Nicht gefunden</div>
+            <a id="sourceOverviewLink" href="#" target="_blank" rel="noopener" hidden>Datei öffnen</a>
+          </div>
+          <div>
+            <div class="title">Kilometer</div>
+            <div id="sourceKmName" class="file-name missing">Nicht gefunden</div>
+            <a id="sourceKmLink" href="#" target="_blank" rel="noopener" hidden>Datei öffnen</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Downloads</h2>
+        <div class="grid">
+          <div>
+            <div class="title">Vertragsübersicht</div>
+            <div id="outOverviewName" class="file-name missing">Noch nicht erzeugt</div>
+            <a id="outOverviewLink" href="#" hidden>Download Übersicht</a>
+          </div>
+          <div>
+            <div class="title">Einzelabrechnungen</div>
+            <div id="outDetailsName" class="file-name missing">Noch nicht erzeugt</div>
+            <a id="outDetailsLink" href="#" hidden>Download Einzelabrechnungen</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Spezial-Downloads</h2>
+        <div class="grid">
+          <div>
+            <div class="title">Spezial Vertragsübersicht</div>
+            <div id="specialOutOverviewName" class="file-name missing">Noch nicht erzeugt</div>
+            <a id="specialOutOverviewLink" href="#" hidden>Download Spezial-Übersicht</a>
+          </div>
+          <div>
+            <div class="title">Spezial Einzelabrechnungen</div>
+            <div id="specialOutDetailsName" class="file-name missing">Noch nicht erzeugt</div>
+            <a id="specialOutDetailsLink" href="#" hidden>Download Spezial-Einzelabrechnungen</a>
+          </div>
+        </div>
+      </section>
+
+      <p><a href="/">Zurück zum Portal</a></p>
+    </main>
+    <script>
+      (function initMehrkilometerPage() {
+        const cfg = window.__SPAREPART_API_CONFIG__ || {};
+        const base = String(cfg.CORE_API_BASE_URL || "").replace(/\/+$/, "");
+        const api = (path) => (base ? `${base}${path}` : path);
+
+        const yearInput = document.getElementById("yearInput");
+        const refreshBtn = document.getElementById("refreshBtn");
+        const createBtn = document.getElementById("createBtn");
+        const createSpecialBtn = document.getElementById("createSpecialBtn");
+        const statusEl = document.getElementById("status");
+
+        const sourceOverviewName = document.getElementById("sourceOverviewName");
+        const sourceKmName = document.getElementById("sourceKmName");
+        const sourceOverviewLink = document.getElementById("sourceOverviewLink");
+        const sourceKmLink = document.getElementById("sourceKmLink");
+        const outOverviewName = document.getElementById("outOverviewName");
+        const outDetailsName = document.getElementById("outDetailsName");
+        const outOverviewLink = document.getElementById("outOverviewLink");
+        const outDetailsLink = document.getElementById("outDetailsLink");
+        const specialOutOverviewName = document.getElementById("specialOutOverviewName");
+        const specialOutDetailsName = document.getElementById("specialOutDetailsName");
+        const specialOutOverviewLink = document.getElementById("specialOutOverviewLink");
+        const specialOutDetailsLink = document.getElementById("specialOutDetailsLink");
+
+        const DEFAULT_YEAR = 2025;
+        yearInput.value = String(DEFAULT_YEAR);
+        let yearInitialized = false;
+
+        const setStatus = (msg, kind) => {
+          statusEl.textContent = msg || "";
+          statusEl.className = `status ${kind || ""}`.trim();
+        };
+
+        const renderFile = (nameEl, linkEl, data, emptyText) => {
+          if (data && data.exists && data.name) {
+            nameEl.textContent = data.name;
+            nameEl.classList.remove("missing");
+            linkEl.hidden = false;
+            linkEl.href = api(data.download_url || "#");
+          } else {
+            nameEl.textContent = emptyText;
+            nameEl.classList.add("missing");
+            linkEl.hidden = true;
+            linkEl.href = "#";
+          }
+        };
+
+        const renderOutputs = (payload) => {
+          renderFile(outOverviewName, outOverviewLink, payload.outputs && payload.outputs.overview, "Noch nicht erzeugt");
+          renderFile(outDetailsName, outDetailsLink, payload.outputs && payload.outputs.details, "Noch nicht erzeugt");
+          renderFile(
+            specialOutOverviewName,
+            specialOutOverviewLink,
+            payload.special_outputs && payload.special_outputs.overview,
+            "Noch nicht erzeugt"
+          );
+          renderFile(
+            specialOutDetailsName,
+            specialOutDetailsLink,
+            payload.special_outputs && payload.special_outputs.details,
+            "Noch nicht erzeugt"
+          );
+        };
+
+        const currentYear = () => {
+          const parsed = Number.parseInt(yearInput.value, 10);
+          if (!Number.isFinite(parsed)) return DEFAULT_YEAR;
+          return Math.max(2000, Math.min(3000, parsed));
+        };
+
+        const refresh = async () => {
+          const year = currentYear();
+          yearInput.value = String(year);
+          try {
+            const resp = await fetch(api(`/api/mehrkilometer/sources?year=${encodeURIComponent(year)}`));
+            const payload = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(payload.detail || "Dateien konnten nicht geladen werden.");
+
+            if (!yearInitialized) {
+              const recommended = Number.parseInt(payload.recommended_year, 10);
+              yearInitialized = true;
+              if (Number.isFinite(recommended) && recommended >= 2000 && recommended <= 3000 && recommended !== year) {
+                yearInput.value = String(recommended);
+                return refresh();
+              }
+            }
+
+            renderFile(sourceOverviewName, sourceOverviewLink, payload.sources && payload.sources.overview, "Nicht gefunden");
+            renderFile(sourceKmName, sourceKmLink, payload.sources && payload.sources.kilometer, "Nicht gefunden");
+            renderOutputs(payload);
+            if (payload.warning) {
+              setStatus(payload.warning, "warn");
+            } else {
+              setStatus("Dateien geladen.", "ok");
+            }
+          } catch (err) {
+            setStatus(err.message || "Fehler beim Laden.", "err");
+          }
+        };
+
+        const createSettlement = async () => {
+          const year = currentYear();
+          yearInput.value = String(year);
+          createBtn.disabled = true;
+          createSpecialBtn.disabled = true;
+          setStatus("Abrechnung läuft ...", "");
+          try {
+            const resp = await fetch(api(`/api/mehrkilometer/create?year=${encodeURIComponent(year)}`), {
+              method: "POST",
+            });
+            const payload = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(payload.detail || "Abrechnung fehlgeschlagen.");
+            renderOutputs(payload);
+            if (payload.warning) {
+              setStatus(`Abrechnung erstellt. ${payload.warning}`, "warn");
+            } else {
+              setStatus("Abrechnung erfolgreich erstellt.", "ok");
+            }
+          } catch (err) {
+            setStatus(err.message || "Abrechnung fehlgeschlagen.", "err");
+          } finally {
+            createBtn.disabled = false;
+            createSpecialBtn.disabled = false;
+          }
+        };
+
+        const createSpecialSettlement = async () => {
+          const year = currentYear();
+          yearInput.value = String(year);
+          createBtn.disabled = true;
+          createSpecialBtn.disabled = true;
+          setStatus("Spezialabrechnung läuft ...", "");
+          try {
+            const resp = await fetch(api(`/api/mehrkilometer/create-special?year=${encodeURIComponent(year)}`), {
+              method: "POST",
+            });
+            const payload = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(payload.detail || "Spezialabrechnung fehlgeschlagen.");
+            renderOutputs(payload);
+            setStatus(
+              payload.warning || "Spezialabrechnung erfolgreich erstellt.",
+              "ok"
+            );
+          } catch (err) {
+            setStatus(err.message || "Spezialabrechnung fehlgeschlagen.", "err");
+          } finally {
+            createBtn.disabled = false;
+            createSpecialBtn.disabled = false;
+          }
+        };
+
+        refreshBtn.addEventListener("click", refresh);
+        createBtn.addEventListener("click", createSettlement);
+        createSpecialBtn.addEventListener("click", createSpecialSettlement);
+        refresh();
+      })();
+    </script>
+  </body>
+</html>

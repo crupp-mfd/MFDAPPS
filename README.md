@@ -60,7 +60,23 @@ Einmalige GitHub-Einstellungen (UI):
 
 Notwendige GitHub Secrets:
 
-1. `AZURE_CREDENTIALS` (Service Principal JSON fuer `azure/login`)
+1. Bevorzugt (teamfreundlich, ohne Passwortrotation im Workflow): OIDC
+   - `AZURE_CLIENT_ID`
+   - `AZURE_TENANT_ID`
+   - `AZURE_SUBSCRIPTION_ID`
+2. Fallback:
+   - `AZURE_CREDENTIALS` (Service Principal JSON fuer `azure/login`)
+
+Workflow-Hinweis:
+
+- Der Deploy-Workflow kann jetzt manuell mit einem beliebigen `ref` (Branch/Tag/SHA) gestartet werden (`Actions -> Deploy Push to mfd-automation -> Run workflow`).
+- Auto-Deploy bei Push auf `main` bleibt unveraendert aktiv.
+
+Repo-Rechte fuer Team-Deploy:
+
+- GitHub Repo Permission: mindestens `Write` (um `workflow_dispatch` auszufuehren bzw. auf `dev/*` zu pushen).
+- GitHub Actions duerfen im Repo nicht global deaktiviert sein.
+- Wenn Fehler `AADSTS7000215 (Invalid client secret)` kommt: `AZURE_CREDENTIALS` ist abgelaufen/falsch. Entweder Secret rotieren oder auf OIDC-Secrets umstellen.
 
 Minimal empfohlene Azure Rollen fuer diesen Service Principal:
 

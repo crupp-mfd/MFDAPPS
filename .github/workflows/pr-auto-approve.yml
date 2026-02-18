@@ -1,20 +1,29 @@
-name: PR Auto-Approve (dev -> main)
+name: PR Auto-Approve
 
 on:
   pull_request_target:
-    branches:
-      - main
     types:
       - opened
       - reopened
       - synchronize
+      - ready_for_review
 
 permissions:
+  contents: read
   pull-requests: write
 
 jobs:
-  auto-approve:
-    if: startsWith(github.head_ref, 'dev/')
+  auto-approve-dependabot:
+    if: github.actor == 'dependabot[bot]' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Auto approve Dependabot PR
+        uses: hmarr/auto-approve-action@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  auto-approve-dev:
+    if: startsWith(github.head_ref, 'dev/') && github.base_ref == 'main' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - name: Auto approve dev PR

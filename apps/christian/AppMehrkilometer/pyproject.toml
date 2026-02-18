@@ -1,0 +1,9 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "app-mehrkilometer"
+version = "0.1.0"
+description = "MFDApps Mehrkilometer Abrechnung"
+requires-python = ">=3.11"
