@@ -10,4 +10,13 @@ while [[ -h "${SOURCE}" ]]; do
   fi
 done
 SCRIPT_DIR="$(cd -P "$(dirname "${SOURCE}")" && pwd)"
+
+PLIST="${HOME}/Library/LaunchAgents/com.mfdapps.staticserver.plist"
+if [[ -f "${PLIST}" ]]; then
+  launchctl kickstart -k "gui/$(id -u)/com.mfdapps.staticserver"
+  echo "LaunchAgent neu gestartet: com.mfdapps.staticserver"
+  echo "URL: http://127.0.0.1:8000/index.html"
+  exit 0
+fi
+
 exec "${SCRIPT_DIR}/scripts/restart-server.sh"
