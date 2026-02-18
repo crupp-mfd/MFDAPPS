@@ -194,13 +194,31 @@ body {
   color: var(--banner-text);
   border: 2px solid #c4b67f;
   border-radius: 4px;
-  padding: 0.65rem 1rem;
-  font-size: clamp(1rem, 2.8vw, 1.45rem);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  padding: 0.45rem 0.65rem 0.35rem;
+  width: 96%;
+  height: calc(100% - 10px);
+  display: grid;
+  gap: 0.15rem;
+  justify-items: center;
+  align-content: center;
   text-align: center;
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2);
+}
+
+.wagon-logo {
+  width: 100%;
+  max-width: none;
+  max-height: 56px;
+  object-fit: contain;
+  display: block;
+}
+
+.wagon-claim {
+  margin: 0;
+  font-size: clamp(0.65rem, 1.35vw, 0.9rem);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .wheel {
@@ -272,6 +290,20 @@ body {
     bottom: 24px;
     width: min(230px, 56vw);
     height: 82px;
+  }
+
+  .banner {
+    padding: 0.3rem 0.35rem 0.2rem;
+    width: 97%;
+    height: calc(100% - 8px);
+  }
+
+  .wagon-logo {
+    max-height: 46px;
+  }
+
+  .wagon-claim {
+    font-size: 0.58rem;
   }
 
   .loco-wheel-1 {
