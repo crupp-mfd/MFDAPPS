@@ -3,468 +3,87 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Altersrechner + Superhelden Padel</title>
+    <title>MFDAPPS Portal</title>
     <style>
       :root {
-        --bg-1: #f4f7ff;
-        --bg-2: #e6fff4;
-        --card: #ffffff;
-        --text: #1f2a44;
-        --accent: #ff6b35;
-        --accent-2: #2b50aa;
-        --court: #2f7d62;
-        --line: #f5f7ff;
+        --bg: #f4f7fb;
+        --panel: #ffffff;
+        --text: #16253a;
+        --muted: #4c617a;
+        --accent: #0d6efd;
       }
-
-      * {
-        box-sizing: border-box;
-      }
-
+      * { box-sizing: border-box; }
       body {
         margin: 0;
-        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
-        color: var(--text);
-        background: linear-gradient(140deg, var(--bg-1), var(--bg-2));
         min-height: 100vh;
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+        background: radial-gradient(circle at 15% 10%, #ffffff 0, var(--bg) 60%);
+        color: var(--text);
+        display: grid;
+        place-items: center;
+        padding: 1.5rem;
       }
-
-      .container {
-        width: min(980px, 92vw);
-        margin: 2rem auto;
+      main {
+        width: min(900px, 100%);
       }
-
-      .card {
-        background: var(--card);
-        border-radius: 18px;
-        padding: 1.2rem;
-        box-shadow: 0 10px 30px rgba(31, 42, 68, 0.12);
-      }
-
       h1 {
-        margin-top: 0;
+        margin: 0 0 0.5rem;
+        font-size: clamp(1.8rem, 3vw, 2.6rem);
       }
-
-      .row {
-        display: flex;
-        gap: 0.8rem;
-        flex-wrap: wrap;
-        align-items: end;
+      p {
+        margin: 0 0 1.2rem;
+        color: var(--muted);
       }
-
-      label {
-        display: block;
-        font-weight: 700;
+      .grid {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+      a.card {
+        text-decoration: none;
+        color: inherit;
+        background: var(--panel);
+        border: 1px solid #dfe7f2;
+        border-radius: 14px;
+        padding: 1rem;
+        transition: transform 0.15s ease, border-color 0.15s ease;
+      }
+      a.card:hover {
+        transform: translateY(-2px);
+        border-color: var(--accent);
+      }
+      .name {
+        font-weight: 800;
         margin-bottom: 0.35rem;
       }
-
-      input[type="date"] {
-        padding: 0.62rem 0.75rem;
-        border-radius: 10px;
-        border: 2px solid #ccd7f4;
-        font-size: 1rem;
-      }
-
-      button {
-        border: 0;
-        border-radius: 10px;
-        padding: 0.68rem 1rem;
-        font-weight: 700;
-        font-size: 1rem;
-        background: linear-gradient(120deg, var(--accent), #ff3d7f);
-        color: #fff;
-        cursor: pointer;
-      }
-
-      .result {
-        margin-top: 1rem;
-        background: #f8fbff;
-        border-left: 5px solid var(--accent-2);
-        border-radius: 12px;
-        padding: 0.8rem;
-        min-height: 52px;
-      }
-
-      .scene-wrap {
-        margin-top: 1.2rem;
-      }
-
-      .scene-title {
-        margin: 0 0 0.6rem 0.2rem;
-        font-weight: 800;
-      }
-
-      .court {
-        position: relative;
-        border-radius: 18px;
-        height: 320px;
-        overflow: hidden;
-        background: linear-gradient(180deg, #0f141d 0%, #1e2733 35%, #131a23 100%);
-        box-shadow: inset 0 8px 18px rgba(0, 0, 0, 0.35);
-      }
-
-      .court-floor {
-        position: absolute;
-        left: 3%;
-        right: 3%;
-        top: 18%;
-        bottom: 4%;
-        clip-path: polygon(8% 0%, 92% 0%, 100% 100%, 0% 100%);
-        background:
-          radial-gradient(circle at 20% 35%, rgba(255, 255, 255, 0.2), transparent 35%),
-          radial-gradient(circle at 80% 65%, rgba(255, 255, 255, 0.14), transparent 32%),
-          linear-gradient(180deg, #2e68e6 0%, #2559ce 100%);
-        z-index: 1;
-      }
-
-      .court-floor::before,
-      .court-floor::after {
-        content: "";
-        position: absolute;
-        background: rgba(252, 252, 216, 0.95);
-      }
-
-      .court-floor::before {
-        width: 3px;
-        height: 100%;
-        left: 50%;
-        top: 0;
-        transform: translateX(-50%);
-      }
-
-      .court-floor::after {
-        height: 3px;
-        width: 100%;
-        left: 0;
-        top: 50%;
-      }
-
-      .court-walls {
-        position: absolute;
-        inset: 0;
-        z-index: 2;
-        pointer-events: none;
-      }
-
-      .wall {
-        position: absolute;
-        background:
-          repeating-linear-gradient(
-            90deg,
-            rgba(255, 255, 255, 0.1) 0 2px,
-            rgba(0, 0, 0, 0.25) 2px 14px
-          ),
-          linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(0, 0, 0, 0.35));
-        border: 2px solid rgba(255, 255, 255, 0.22);
-      }
-
-      .wall.left {
-        left: 2%;
-        top: 20%;
-        bottom: 5%;
-        width: 17%;
-        transform: skewY(12deg);
-      }
-
-      .wall.right {
-        right: 2%;
-        top: 20%;
-        bottom: 5%;
-        width: 17%;
-        transform: skewY(-12deg);
-      }
-
-      .wall.back {
-        left: 21%;
-        right: 21%;
-        top: 7%;
-        height: 19%;
-      }
-
-      .net {
-        position: absolute;
-        left: 18%;
-        right: 18%;
-        top: 49%;
-        height: 7px;
-        z-index: 3;
-        background:
-          linear-gradient(180deg, #fbf5db 0 2px, #8e96ab 2px 100%);
-        box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25);
-      }
-
-      .hero {
-        position: absolute;
-        width: 54px;
-        height: 98px;
-        transform-origin: center bottom;
-        animation: bounce 1s infinite alternate ease-in-out;
-        z-index: 4;
-      }
-
-      .head {
-        width: 22px;
-        height: 22px;
-        border-radius: 50%;
-        background: #ffd2a6;
-        margin: 0 auto;
-      }
-
-      .body {
-        width: 30px;
-        height: 42px;
-        border-radius: 8px;
-        margin: 4px auto 0;
-        position: relative;
-      }
-
-      .leg {
-        width: 10px;
-        height: 26px;
-        background: #25314d;
-        border-radius: 8px;
-        position: absolute;
-        bottom: 0;
-      }
-
-      .leg.left {
-        left: 16px;
-      }
-
-      .leg.right {
-        right: 16px;
-      }
-
-      .racket {
-        position: absolute;
-        width: 12px;
-        height: 30px;
-        border: 3px solid #fff;
-        border-radius: 12px;
-        right: 0;
-        top: 26px;
-        transform: rotate(-35deg);
-      }
-
-      .cape {
-        position: absolute;
-        width: 20px;
-        height: 34px;
-        left: 3px;
-        top: 28px;
-        border-radius: 8px 0 10px 12px;
-        transform: rotate(8deg);
-        z-index: -1;
-      }
-
-      .mask {
-        position: absolute;
-        width: 22px;
-        height: 8px;
-        left: 16px;
-        top: 6px;
-        border-radius: 8px;
-      }
-
-      .emblem {
-        position: absolute;
-        inset: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 14px;
-        font-weight: 800;
-        color: #fff;
-      }
-
-      .hero-name {
-        position: absolute;
-        left: -8px;
-        top: -18px;
-        color: #fff;
-        font-size: 10px;
-        padding: 2px 6px;
-        border-radius: 999px;
-        white-space: nowrap;
-        font-weight: 800;
-      }
-
-      .hero.one { left: 12%; top: 52%; animation-delay: 0.1s; }
-      .hero.two { left: 34%; top: 58%; animation-delay: 0.35s; }
-      .hero.three { right: 33%; top: 24%; animation-delay: 0.2s; }
-      .hero.four { right: 12%; top: 18%; animation-delay: 0.5s; }
-
-      .one .body { background: linear-gradient(180deg, #ff5a36, #a31212); box-shadow: 0 0 10px rgba(255, 72, 0, 0.7); }
-      .two .body { background: linear-gradient(180deg, #4cc9ff, #1140bf); box-shadow: 0 0 10px rgba(76, 201, 255, 0.7); }
-      .three .body { background: linear-gradient(180deg, #4a4d57, #171a22); box-shadow: 0 0 10px rgba(255, 193, 7, 0.45); }
-      .four .body { background: linear-gradient(180deg, #5e3a8a, #1f1233); box-shadow: 0 0 10px rgba(166, 77, 255, 0.75); }
-      .one .cape { background: #7a0c0c; }
-      .two .cape { background: #0f5cbf; }
-      .three .cape { background: #7b1026; }
-      .four .cape { background: #24153f; }
-      .one .mask { background: #ffa236; }
-      .two .mask { background: #7fe7ff; }
-      .three .mask { background: #f2b705; }
-      .four .mask { background: #b12bff; }
-      .one .hero-name { background: linear-gradient(120deg, #ff8c32, #ff2e2e); box-shadow: 0 0 8px rgba(255, 114, 0, 0.8); }
-      .two .hero-name { background: linear-gradient(120deg, #84e8ff, #2882ff); box-shadow: 0 0 8px rgba(70, 196, 255, 0.8); }
-      .three .hero-name { background: linear-gradient(120deg, #f7ce55, #8f5f00); box-shadow: 0 0 8px rgba(248, 192, 47, 0.7); }
-      .four .hero-name { background: linear-gradient(120deg, #b26dff, #5f1db2); box-shadow: 0 0 8px rgba(149, 77, 255, 0.8); }
-      .four .head { background: #2a1c44; }
-      .four .emblem { color: #e7ceff; }
-
-      .ball {
-        position: absolute;
-        width: 16px;
-        height: 16px;
-        border-radius: 50%;
-        background: #faff00;
-        box-shadow: 0 0 10px rgba(250, 255, 0, 0.7);
-        animation: rally 3.5s infinite linear;
-        z-index: 5;
-      }
-
-      @keyframes rally {
-        0%   { left: 16%; top: 68%; }
-        25%  { left: 41%; top: 54%; }
-        50%  { left: 74%; top: 25%; }
-        75%  { left: 52%; top: 41%; }
-        100% { left: 18%; top: 67%; }
-      }
-
-      @keyframes bounce {
-        from { transform: translateY(0); }
-        to   { transform: translateY(-6px); }
-      }
-
-      @media (max-width: 720px) {
-        .court {
-          height: 250px;
-        }
+      .hint {
+        font-size: 0.92rem;
+        color: var(--muted);
       }
     </style>
   </head>
   <body>
-    <div class="container">
-      <section class="card">
-        <h1>Geburtstags-Rechner</h1>
-        <div class="row">
-          <div>
-            <label for="birthday">Geburtsdatum</label>
-            <input id="birthday" type="date" />
-          </div>
-          <button id="calcBtn" type="button">Alter berechnen</button>
-        </div>
-        <div class="result" id="result">Bitte dein Geburtsdatum eingeben.</div>
+    <main>
+      <h1>MFDAPPS Portal</h1>
+      <p>Hier liegen die getrennten Seiten je App/Entwickler.</p>
+      <section class="grid">
+        <a class="card" href="/apps/christian/">
+          <div class="name">Christian</div>
+          <div class="hint">Papperlapapp App</div>
+        </a>
+        <a class="card" href="/apps/ali/">
+          <div class="name">Ali</div>
+          <div class="hint">Altersrechner + Superhelden Padel</div>
+        </a>
+        <a class="card" href="/apps/timo/">
+          <div class="name">Timo</div>
+          <div class="hint">Willkommen und Gueterwagen-Animation</div>
+        </a>
+        <a class="card" href="/apps/AppMehrkilometer/">
+          <div class="name">AppMehrkilometer</div>
+          <div class="hint">Mehrkilometer App</div>
+        </a>
       </section>
-
-      <section class="scene-wrap">
-        <p class="scene-title">Superhelden spielen Padel</p>
-        <div class="court" aria-label="Padel-Szene mit vier Superhelden">
-          <div class="court-floor"></div>
-          <div class="court-walls">
-            <div class="wall left"></div>
-            <div class="wall right"></div>
-            <div class="wall back"></div>
-          </div>
-          <div class="net"></div>
-          <div class="ball"></div>
-
-          <div class="hero one">
-            <div class="hero-name">Flame</div>
-            <div class="head"></div>
-            <div class="mask"></div>
-            <div class="cape"></div>
-            <div class="body"><div class="emblem">F</div></div>
-            <div class="racket"></div>
-            <div class="leg left"></div>
-            <div class="leg right"></div>
-          </div>
-
-          <div class="hero two">
-            <div class="hero-name">Aqua</div>
-            <div class="head"></div>
-            <div class="mask"></div>
-            <div class="cape"></div>
-            <div class="body"><div class="emblem">A</div></div>
-            <div class="racket"></div>
-            <div class="leg left"></div>
-            <div class="leg right"></div>
-          </div>
-
-          <div class="hero three">
-            <div class="hero-name">Titan</div>
-            <div class="head"></div>
-            <div class="mask"></div>
-            <div class="cape"></div>
-            <div class="body"><div class="emblem">T</div></div>
-            <div class="racket"></div>
-            <div class="leg left"></div>
-            <div class="leg right"></div>
-          </div>
-
-          <div class="hero four">
-            <div class="hero-name">Shadow</div>
-            <div class="head"></div>
-            <div class="mask"></div>
-            <div class="cape"></div>
-            <div class="body"><div class="emblem">S</div></div>
-            <div class="racket"></div>
-            <div class="leg left"></div>
-            <div class="leg right"></div>
-          </div>
-        </div>
-      </section>
-    </div>
-
-    <script>
-      function calculateAgeParts(birthDate, today) {
-        let years = today.getFullYear() - birthDate.getFullYear();
-        let months = today.getMonth() - birthDate.getMonth();
-        let days = today.getDate() - birthDate.getDate();
-
-        if (days < 0) {
-          const prevMonthLastDay = new Date(today.getFullYear(), today.getMonth(), 0).getDate();
-          days += prevMonthLastDay;
-          months -= 1;
-        }
-
-        if (months < 0) {
-          months += 12;
-          years -= 1;
-        }
-
-        return { years, months, days };
-      }
-
-      const birthdayInput = document.getElementById("birthday");
-      const calcBtn = document.getElementById("calcBtn");
-      const result = document.getElementById("result");
-
-      calcBtn.addEventListener("click", () => {
-        if (!birthdayInput.value) {
-          result.textContent = "Bitte zuerst ein Datum auswählen.";
-          return;
-        }
-
-        const birthDate = new Date(birthdayInput.value + "T00:00:00");
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        if (birthDate > today) {
-          result.textContent = "Das Geburtsdatum liegt in der Zukunft.";
-          return;
-        }
-
-        const age = calculateAgeParts(birthDate, today);
-        result.textContent =
-          "Du bist " +
-          age.years +
-          " Jahre, " +
-          age.months +
-          " Monate und " +
-          age.days +
-          " Tage alt.";
-      });
-    </script>
+    </main>
   </body>
 </html>
