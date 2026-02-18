@@ -32,7 +32,8 @@ read_pid() {
 is_running() {
   local pid
   pid="$(read_pid)" || return 1
-  kill -0 "$pid" 2>/dev/null
+  kill -0 "$pid" 2>/dev/null || return 1
+  ps -p "$pid" -o command= 2>/dev/null | grep -F "$APP_FILE" >/dev/null 2>&1
 }
 
 cleanup_stale_pid() {
@@ -45,7 +46,38 @@ port_owner_pid() {
   lsof -t -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -n1 || true
 }
 
+wait_for_http() {
+  local url="http://$HOST:$PORT/"
+  for _ in {1..20}; do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+free_port_if_requested() {
+  local owner_pid
+  owner_pid="$(port_owner_pid)"
+  [[ -n "$owner_pid" ]] || return 0
+
+  if [[ "${1:-}" != "force" ]]; then
+    echo "Fehler: Port $PORT ist bereits belegt (PID $owner_pid)."
+    echo "Stoppe den Prozess oder starte mit anderem Port: PORT=8080 $0 start"
+    exit 1
+  fi
+
+  echo "Port $PORT ist belegt (PID $owner_pid), beende Prozess fuer restart."
+  kill "$owner_pid" 2>/dev/null || true
+  sleep 0.5
+  if kill -0 "$owner_pid" 2>/dev/null; then
+    kill -9 "$owner_pid" 2>/dev/null || true
+  fi
+}
+
 start_server() {
+  local reclaim_mode="${1:-}"
   cleanup_stale_pid
 
   if is_running; then
@@ -58,21 +90,15 @@ start_server() {
     exit 1
   fi
 
-  local owner_pid
-  owner_pid="$(port_owner_pid)"
-  if [[ -n "$owner_pid" ]]; then
-    echo "Fehler: Port $PORT ist bereits belegt (PID $owner_pid)."
-    echo "Stoppe den Prozess oder starte mit anderem Port: PORT=8080 $0 start"
-    exit 1
-  fi
+  free_port_if_requested "$reclaim_mode"
 
   touch "$LOG_FILE"
   nohup "$PYTHON_BIN" "$APP_FILE" --host "$HOST" --port "$PORT" >>"$LOG_FILE" 2>&1 &
   local new_pid=$!
   echo "$new_pid" >"$PID_FILE"
 
-  sleep 1
-  if kill -0 "$new_pid" 2>/dev/null; then
+  sleep 0.5
+  if kill -0 "$new_pid" 2>/dev/null && wait_for_http; then
     echo "Server gestartet (PID $new_pid) auf http://$HOST:$PORT"
     echo "Log: $LOG_FILE"
   else
@@ -130,7 +156,7 @@ case "$cmd" in
   stop) stop_server ;;
   restart)
     stop_server
-    start_server
+    start_server force
     ;;
   status) status_server ;;
   logs) show_logs ;;
