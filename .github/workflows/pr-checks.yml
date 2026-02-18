@@ -1,0 +1,40 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate Python syntax
+        run: |
+          set -euo pipefail
+          python -m py_compile app.py
+          python -m py_compile function_app.py
+
+      - name: Validate shell scripts
+        run: |
+          set -euo pipefail
+          bash -n scripts/*.sh
+
+      - name: Validate required files
+        run: |
+          set -euo pipefail
+          test -f index.html
+          test -f apps/christian/index.html
+          test -f apps/ali/index.html
+          test -f apps/timo/index.html
