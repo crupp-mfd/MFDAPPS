@@ -98,30 +98,98 @@
         border-radius: 18px;
         height: 320px;
         overflow: hidden;
-        background:
-          linear-gradient(180deg, #bde8ff 0%, #e8f9ff 40%, transparent 40%),
-          var(--court);
+        background: linear-gradient(180deg, #0f141d 0%, #1e2733 35%, #131a23 100%);
+        box-shadow: inset 0 8px 18px rgba(0, 0, 0, 0.35);
       }
 
-      .court::before,
-      .court::after {
+      .court-floor {
+        position: absolute;
+        left: 3%;
+        right: 3%;
+        top: 18%;
+        bottom: 4%;
+        clip-path: polygon(8% 0%, 92% 0%, 100% 100%, 0% 100%);
+        background:
+          radial-gradient(circle at 20% 35%, rgba(255, 255, 255, 0.2), transparent 35%),
+          radial-gradient(circle at 80% 65%, rgba(255, 255, 255, 0.14), transparent 32%),
+          linear-gradient(180deg, #2e68e6 0%, #2559ce 100%);
+        z-index: 1;
+      }
+
+      .court-floor::before,
+      .court-floor::after {
         content: "";
         position: absolute;
-        background: var(--line);
+        background: rgba(252, 252, 216, 0.95);
       }
 
-      .court::before {
-        width: 100%;
-        height: 4px;
-        top: 50%;
-        left: 0;
-      }
-
-      .court::after {
-        width: 4px;
+      .court-floor::before {
+        width: 3px;
         height: 100%;
-        top: 0;
         left: 50%;
+        top: 0;
+        transform: translateX(-50%);
+      }
+
+      .court-floor::after {
+        height: 3px;
+        width: 100%;
+        left: 0;
+        top: 50%;
+      }
+
+      .court-walls {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        pointer-events: none;
+      }
+
+      .wall {
+        position: absolute;
+        background:
+          repeating-linear-gradient(
+            90deg,
+            rgba(255, 255, 255, 0.1) 0 2px,
+            rgba(0, 0, 0, 0.25) 2px 14px
+          ),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(0, 0, 0, 0.35));
+        border: 2px solid rgba(255, 255, 255, 0.22);
+      }
+
+      .wall.left {
+        left: 2%;
+        top: 20%;
+        bottom: 5%;
+        width: 17%;
+        transform: skewY(12deg);
+      }
+
+      .wall.right {
+        right: 2%;
+        top: 20%;
+        bottom: 5%;
+        width: 17%;
+        transform: skewY(-12deg);
+      }
+
+      .wall.back {
+        left: 21%;
+        right: 21%;
+        top: 7%;
+        height: 19%;
+      }
+
+      .net {
+        position: absolute;
+        left: 18%;
+        right: 18%;
+        top: 49%;
+        height: 7px;
+        z-index: 3;
+        background:
+          linear-gradient(180deg, #fbf5db 0 2px, #8e96ab 2px 100%);
+        box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25);
       }
 
       .hero {
@@ -130,6 +198,7 @@
         height: 98px;
         transform-origin: center bottom;
         animation: bounce 1s infinite alternate ease-in-out;
+        z-index: 4;
       }
 
       .head {
@@ -145,6 +214,7 @@
         height: 42px;
         border-radius: 8px;
         margin: 4px auto 0;
+        position: relative;
       }
 
       .leg {
@@ -175,15 +245,72 @@
         transform: rotate(-35deg);
       }
 
+      .cape {
+        position: absolute;
+        width: 20px;
+        height: 34px;
+        left: 3px;
+        top: 28px;
+        border-radius: 8px 0 10px 12px;
+        transform: rotate(8deg);
+        z-index: -1;
+      }
+
+      .mask {
+        position: absolute;
+        width: 22px;
+        height: 8px;
+        left: 16px;
+        top: 6px;
+        border-radius: 8px;
+      }
+
+      .emblem {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        font-weight: 800;
+        color: #fff;
+      }
+
+      .hero-name {
+        position: absolute;
+        left: -8px;
+        top: -18px;
+        color: #fff;
+        font-size: 10px;
+        padding: 2px 6px;
+        border-radius: 999px;
+        white-space: nowrap;
+        font-weight: 800;
+      }
+
       .hero.one { left: 12%; top: 52%; animation-delay: 0.1s; }
       .hero.two { left: 34%; top: 58%; animation-delay: 0.35s; }
       .hero.three { right: 33%; top: 24%; animation-delay: 0.2s; }
       .hero.four { right: 12%; top: 18%; animation-delay: 0.5s; }
 
-      .one .body { background: #e63946; }
-      .two .body { background: #4361ee; }
-      .three .body { background: #ff9f1c; }
-      .four .body { background: #2a9d8f; }
+      .one .body { background: linear-gradient(180deg, #ff5a36, #a31212); box-shadow: 0 0 10px rgba(255, 72, 0, 0.7); }
+      .two .body { background: linear-gradient(180deg, #4cc9ff, #1140bf); box-shadow: 0 0 10px rgba(76, 201, 255, 0.7); }
+      .three .body { background: linear-gradient(180deg, #4a4d57, #171a22); box-shadow: 0 0 10px rgba(255, 193, 7, 0.45); }
+      .four .body { background: linear-gradient(180deg, #5e3a8a, #1f1233); box-shadow: 0 0 10px rgba(166, 77, 255, 0.75); }
+      .one .cape { background: #7a0c0c; }
+      .two .cape { background: #0f5cbf; }
+      .three .cape { background: #7b1026; }
+      .four .cape { background: #24153f; }
+      .one .mask { background: #ffa236; }
+      .two .mask { background: #7fe7ff; }
+      .three .mask { background: #f2b705; }
+      .four .mask { background: #b12bff; }
+      .one .hero-name { background: linear-gradient(120deg, #ff8c32, #ff2e2e); box-shadow: 0 0 8px rgba(255, 114, 0, 0.8); }
+      .two .hero-name { background: linear-gradient(120deg, #84e8ff, #2882ff); box-shadow: 0 0 8px rgba(70, 196, 255, 0.8); }
+      .three .hero-name { background: linear-gradient(120deg, #f7ce55, #8f5f00); box-shadow: 0 0 8px rgba(248, 192, 47, 0.7); }
+      .four .hero-name { background: linear-gradient(120deg, #b26dff, #5f1db2); box-shadow: 0 0 8px rgba(149, 77, 255, 0.8); }
+      .four .head { background: #2a1c44; }
+      .four .emblem { color: #e7ceff; }
 
       .ball {
         position: absolute;
@@ -193,6 +320,7 @@
         background: #faff00;
         box-shadow: 0 0 10px rgba(250, 255, 0, 0.7);
         animation: rally 3.5s infinite linear;
+        z-index: 5;
       }
 
       @keyframes rally {
@@ -232,35 +360,54 @@
       <section class="scene-wrap">
         <p class="scene-title">Superhelden spielen Padel</p>
         <div class="court" aria-label="Padel-Szene mit vier Superhelden">
+          <div class="court-floor"></div>
+          <div class="court-walls">
+            <div class="wall left"></div>
+            <div class="wall right"></div>
+            <div class="wall back"></div>
+          </div>
+          <div class="net"></div>
           <div class="ball"></div>
 
           <div class="hero one">
+            <div class="hero-name">Flame</div>
             <div class="head"></div>
-            <div class="body"></div>
+            <div class="mask"></div>
+            <div class="cape"></div>
+            <div class="body"><div class="emblem">F</div></div>
             <div class="racket"></div>
             <div class="leg left"></div>
             <div class="leg right"></div>
           </div>
 
           <div class="hero two">
+            <div class="hero-name">Aqua</div>
             <div class="head"></div>
-            <div class="body"></div>
+            <div class="mask"></div>
+            <div class="cape"></div>
+            <div class="body"><div class="emblem">A</div></div>
             <div class="racket"></div>
             <div class="leg left"></div>
             <div class="leg right"></div>
           </div>
 
           <div class="hero three">
+            <div class="hero-name">Titan</div>
             <div class="head"></div>
-            <div class="body"></div>
+            <div class="mask"></div>
+            <div class="cape"></div>
+            <div class="body"><div class="emblem">T</div></div>
             <div class="racket"></div>
             <div class="leg left"></div>
             <div class="leg right"></div>
           </div>
 
           <div class="hero four">
+            <div class="hero-name">Shadow</div>
             <div class="head"></div>
-            <div class="body"></div>
+            <div class="mask"></div>
+            <div class="cape"></div>
+            <div class="body"><div class="emblem">S</div></div>
             <div class="racket"></div>
             <div class="leg left"></div>
             <div class="leg right"></div>
