@@ -3,22 +3,83 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Name Flight</title>
-    <link rel="stylesheet" href="styles.css" />
+    <title>MFDAPPS Portal</title>
+    <style>
+      :root {
+        --bg: #f4f7fb;
+        --panel: #ffffff;
+        --text: #16253a;
+        --muted: #4c617a;
+        --accent: #0d6efd;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+        background: radial-gradient(circle at 15% 10%, #ffffff 0, var(--bg) 60%);
+        color: var(--text);
+        display: grid;
+        place-items: center;
+        padding: 1.5rem;
+      }
+      main {
+        width: min(900px, 100%);
+      }
+      h1 {
+        margin: 0 0 0.5rem;
+        font-size: clamp(1.8rem, 3vw, 2.6rem);
+      }
+      p {
+        margin: 0 0 1.2rem;
+        color: var(--muted);
+      }
+      .grid {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+      a.card {
+        text-decoration: none;
+        color: inherit;
+        background: var(--panel);
+        border: 1px solid #dfe7f2;
+        border-radius: 14px;
+        padding: 1rem;
+        transition: transform 0.15s ease, border-color 0.15s ease;
+      }
+      a.card:hover {
+        transform: translateY(-2px);
+        border-color: var(--accent);
+      }
+      .name {
+        font-weight: 800;
+        margin-bottom: 0.35rem;
+      }
+      .hint {
+        font-size: 0.92rem;
+        color: var(--muted);
+      }
+    </style>
   </head>
   <body>
-    <main class="app">
-      <h1>Name Flight</h1>
-      <p>Gib deinen Namen ein und lass ihn durch den Browser fliegen.</p>
-
-      <form id="name-form" class="controls" autocomplete="off">
-        <input id="name-input" type="text" maxlength="30" placeholder="Dein Name" required />
-        <button type="submit">Start</button>
-      </form>
-
-      <section id="stage" aria-live="polite"></section>
+    <main>
+      <h1>MFDAPPS Portal</h1>
+      <p>Hier liegen die drei getrennten Seiten je Entwickler.</p>
+      <section class="grid">
+        <a class="card" href="/apps/christian/">
+          <div class="name">Christian</div>
+          <div class="hint">Name Flight App</div>
+        </a>
+        <a class="card" href="/apps/ali/">
+          <div class="name">Ali</div>
+          <div class="hint">Platzhalter fuer Alis Seite</div>
+        </a>
+        <a class="card" href="/apps/timo/">
+          <div class="name">Timo</div>
+          <div class="hint">Platzhalter fuer Timos Seite</div>
+        </a>
+      </section>
     </main>
-
-    <script src="app.js"></script>
   </body>
 </html>
