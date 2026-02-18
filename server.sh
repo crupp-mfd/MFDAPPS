@@ -33,7 +33,7 @@ is_running() {
   local pid
   pid="$(read_pid)" || return 1
   kill -0 "$pid" 2>/dev/null || return 1
-  ps -p "$pid" -o command= 2>/dev/null | grep -F "$APP_FILE" >/dev/null 2>&1
+  lsof -nP -a -p "$pid" -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1
 }
 
 cleanup_stale_pid() {
