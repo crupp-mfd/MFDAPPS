@@ -1,0 +1,9 @@
+.git
+.github
+.venv
+.vscode
+__pycache__
+.run
+*.pyc
+local.settings.json
+

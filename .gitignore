@@ -20,3 +20,4 @@ local.settings.json
 
 # Misc
 .env
+.run/
