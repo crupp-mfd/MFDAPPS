@@ -72,7 +72,7 @@ Optional Team-Rechte (Ali/Timo/Christian lokal deployen):
 - auf `rg-mfd-automation`: `Contributor` oder `Container App Contributor`
 - auf `acrmfdauto10028`: `AcrPush`
 
-## Name Flight WebApp
+## Papperlapapp WebApp
 
 Lokaler Start:
 

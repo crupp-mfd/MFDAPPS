@@ -18,7 +18,7 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the Name Flight web app.")
+    parser = argparse.ArgumentParser(description="Run the Papperlapapp web app.")
     parser.add_argument("--host", default=DEFAULT_HOST, help="Host/IP to bind to.")
     parser.add_argument(
         "--port", type=int, default=DEFAULT_PORT, help="Preferred start port."
