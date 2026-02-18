@@ -3,15 +3,61 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Timo - Seite</title>
-    <style>
-      body { font-family: "Trebuchet MS", "Segoe UI", sans-serif; margin: 0; padding: 2rem; }
-      a { color: #0d6efd; }
-    </style>
+    <title>Willkommen</title>
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <h1>Timo</h1>
-    <p>Diese Seite ist ein Platzhalter. Hier kann Timos eigene index.html eingefuegt werden.</p>
-    <p><a href="/">Zurueck zum Portal</a></p>
+    <main class="scene">
+      <header class="welcome">
+        <h1>Willkommen</h1>
+      </header>
+
+      <section class="mountains" aria-hidden="true">
+        <div class="mountain back"></div>
+        <div class="mountain mid"></div>
+        <div class="mountain front"></div>
+      </section>
+
+      <section class="railway" aria-label="Güterwagen mit Banner">
+        <div class="track"></div>
+        <div class="train" id="train">
+          <div class="locomotive">
+            <div class="loco-cab"></div>
+            <div class="loco-chimney"></div>
+            <div class="loco-window"></div>
+          </div>
+          <div class="coupler coupler-1"></div>
+          <div class="wagon wagon-1">
+            <div class="banner">
+              <img src="./logo.svg" alt="MFDGroup Logo" class="wagon-logo" />
+              <p class="wagon-claim">Beste IT der Schweiz</p>
+            </div>
+          </div>
+          <div class="coupler coupler-2"></div>
+          <div class="wagon wagon-2">
+            <div class="banner">
+              <img src="./logo.svg" alt="MFDGroup Logo" class="wagon-logo" />
+              <p class="wagon-claim">Beste IT der Schweiz</p>
+            </div>
+          </div>
+          <div class="coupler coupler-3"></div>
+          <div class="wagon wagon-3">
+            <div class="banner">
+              <img src="./logo.svg" alt="MFDGroup Logo" class="wagon-logo" />
+              <p class="wagon-claim">Beste IT der Schweiz</p>
+            </div>
+          </div>
+          <div class="wheel loco-wheel-1"></div>
+          <div class="wheel loco-wheel-2"></div>
+          <div class="wheel wagon1-wheel-1"></div>
+          <div class="wheel wagon1-wheel-2"></div>
+          <div class="wheel wagon2-wheel-1"></div>
+          <div class="wheel wagon2-wheel-2"></div>
+          <div class="wheel wagon3-wheel-1"></div>
+          <div class="wheel wagon3-wheel-2"></div>
+        </div>
+      </section>
+    </main>
+    <script src="./script.js"></script>
   </body>
 </html>
