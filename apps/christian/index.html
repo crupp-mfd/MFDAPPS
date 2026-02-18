@@ -3,21 +3,32 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Papperlapapp</title>
+    <title>Papperlapapp: Chicken Shooter</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main class="app">
-      <h1>Papperlapapp</h1>
-      <p>Gib deinen Namen ein und lass ihn durch den Browser fliegen.</p>
+    <main class="game-shell">
+      <header class="hud">
+        <h1>Papperlapapp: Chicken Shooter</h1>
+        <div class="stats">
+          <span>Score: <strong id="score">0</strong></span>
+          <span>Zeit: <strong id="time">60</strong>s</span>
+          <span>Treffer: <strong id="hits">0</strong></span>
+          <span>Schuesse: <strong id="shots">0</strong></span>
+          <span>Quote: <strong id="accuracy">0%</strong></span>
+        </div>
+        <button id="start-btn" type="button">Spiel Starten</button>
+      </header>
 
-      <form id="name-form" class="controls" autocomplete="off">
-        <input id="name-input" type="text" maxlength="30" placeholder="Dein Name" required />
-        <button type="submit">Start</button>
-      </form>
+      <section id="arena" class="arena" aria-label="Spielbereich"></section>
 
-      <section id="stage" aria-live="polite"></section>
+      <footer class="statusbar">
+        <span id="status-text">Bereit. Ziel erfassen und schiessen.</span>
+      </footer>
     </main>
+
+    <div id="crosshair" class="crosshair" aria-hidden="true"></div>
+    <div id="pistol" class="pistol" aria-hidden="true">🔫</div>
 
     <script src="app.js"></script>
   </body>

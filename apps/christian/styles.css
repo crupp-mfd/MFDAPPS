@@ -1,8 +1,11 @@
 :root {
-  --bg-1: #f6fbff;
-  --bg-2: #d8ecff;
-  --accent: #0c6cf2;
-  --text: #0d2340;
+  --sky-1: #90d7ff;
+  --sky-2: #eef9ff;
+  --grass-1: #7ecb66;
+  --grass-2: #5cab4a;
+  --ink: #13263e;
+  --panel: rgba(255, 255, 255, 0.92);
+  --accent: #ff4a5f;
 }
 
 * {
@@ -13,69 +16,162 @@ body {
   margin: 0;
   min-height: 100vh;
   font-family: "Trebuchet MS", "Segoe UI", sans-serif;
-  color: var(--text);
-  background: radial-gradient(circle at 20% 20%, #ffffff 0, var(--bg-1) 40%, var(--bg-2) 100%);
+  color: var(--ink);
+  background: linear-gradient(180deg, var(--sky-1) 0%, var(--sky-2) 48%, var(--grass-1) 48%, var(--grass-2) 100%);
   overflow: hidden;
 }
 
-.app {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 2rem 1.25rem;
+.game-shell {
+  position: relative;
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
 }
 
-h1 {
-  margin: 0 0 0.5rem;
-  font-size: clamp(2rem, 4vw, 3rem);
+.hud {
+  background: var(--panel);
+  backdrop-filter: blur(4px);
+  border-bottom: 1px solid rgba(19, 38, 62, 0.14);
+  padding: 0.8rem 1rem;
+  display: grid;
+  gap: 0.5rem;
 }
 
-p {
-  margin: 0 0 1.25rem;
+.hud h1 {
+  margin: 0;
+  font-size: clamp(1.2rem, 2.5vw, 1.8rem);
 }
 
-.controls {
+.stats {
   display: flex;
-  gap: 0.6rem;
-  margin-bottom: 1rem;
   flex-wrap: wrap;
+  gap: 0.75rem;
+  font-weight: 700;
 }
 
-input,
-button {
+#start-btn {
+  justify-self: start;
   border: 0;
   border-radius: 10px;
-  font-size: 1rem;
-  padding: 0.75rem 1rem;
-}
-
-input {
-  min-width: min(26rem, 100%);
-  box-shadow: 0 0 0 2px rgba(12, 108, 242, 0.15);
-}
-
-button {
-  background: var(--accent);
+  padding: 0.55rem 0.9rem;
+  font-weight: 800;
+  background: linear-gradient(120deg, #ff6f3c, #ff2f7f);
   color: #fff;
-  font-weight: 700;
   cursor: pointer;
 }
 
-#stage {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
+.arena {
+  position: relative;
+  overflow: hidden;
+  cursor: none;
 }
 
-.flying-name {
-  position: fixed;
-  left: 0;
-  top: 0;
-  transform: translate3d(0, 0, 0);
-  font-size: clamp(1.4rem, 3vw, 3.4rem);
-  font-weight: 800;
-  letter-spacing: 0.02em;
-  color: var(--accent);
-  text-shadow: 0 8px 20px rgba(12, 108, 242, 0.3);
+.statusbar {
+  background: var(--panel);
+  border-top: 1px solid rgba(19, 38, 62, 0.14);
+  padding: 0.6rem 1rem;
+  font-weight: 700;
+}
+
+.chicken {
+  position: absolute;
+  width: clamp(72px, 8vw, 112px);
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: clamp(2.2rem, 4vw, 3.2rem);
   user-select: none;
-  white-space: nowrap;
+  filter: drop-shadow(0 8px 8px rgba(0, 0, 0, 0.22));
+}
+
+.chicken::before {
+  content: "🐔";
+}
+
+.chicken.glow {
+  background: radial-gradient(circle at 30% 30%, #fff8c4, #ffd5f2 70%);
+}
+
+.chicken.royal {
+  background: radial-gradient(circle at 35% 30%, #c8f4ff, #f4d3ff 68%);
+}
+
+.chicken.sunset {
+  background: radial-gradient(circle at 35% 30%, #fff4c6, #ffd0a2 68%);
+}
+
+.chicken .tag {
+  position: absolute;
+  top: -0.55rem;
+  right: -0.2rem;
+  font-size: 1rem;
+}
+
+.chicken.hit {
+  animation: pop 170ms ease-out forwards;
+}
+
+.crosshair {
+  position: fixed;
+  width: 30px;
+  height: 30px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  z-index: 50;
+}
+
+.crosshair::before,
+.crosshair::after {
+  content: "";
+  position: absolute;
+  background: #fff;
+  left: 50%;
+  top: 50%;
+}
+
+.crosshair::before {
+  width: 2px;
+  height: 36px;
+  transform: translate(-50%, -50%);
+}
+
+.crosshair::after {
+  width: 36px;
+  height: 2px;
+  transform: translate(-50%, -50%);
+}
+
+.pistol {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  font-size: clamp(2rem, 5vw, 3rem);
+  transform-origin: 80% 80%;
+  pointer-events: none;
+  filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.35));
+}
+
+.pistol.recoil {
+  animation: recoil 120ms ease-out;
+}
+
+@keyframes pop {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(1.45) rotate(18deg); }
+}
+
+@keyframes recoil {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(-12deg) scale(0.94); }
+  100% { transform: rotate(0deg) scale(1); }
+}
+
+@media (max-width: 760px) {
+  .stats {
+    font-size: 0.9rem;
+  }
 }
