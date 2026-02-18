@@ -145,6 +145,7 @@
         height: 42px;
         border-radius: 8px;
         margin: 4px auto 0;
+        position: relative;
       }
 
       .leg {
@@ -175,6 +176,49 @@
         transform: rotate(-35deg);
       }
 
+      .cape {
+        position: absolute;
+        width: 20px;
+        height: 34px;
+        left: 3px;
+        top: 28px;
+        border-radius: 8px 0 10px 12px;
+        transform: rotate(8deg);
+        z-index: -1;
+      }
+
+      .mask {
+        position: absolute;
+        width: 22px;
+        height: 8px;
+        left: 16px;
+        top: 6px;
+        border-radius: 8px;
+      }
+
+      .emblem {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        font-weight: 800;
+        color: #fff;
+      }
+
+      .hero-name {
+        position: absolute;
+        left: -8px;
+        top: -18px;
+        background: rgba(16, 24, 40, 0.85);
+        color: #fff;
+        font-size: 10px;
+        padding: 2px 6px;
+        border-radius: 999px;
+        white-space: nowrap;
+      }
+
       .hero.one { left: 12%; top: 52%; animation-delay: 0.1s; }
       .hero.two { left: 34%; top: 58%; animation-delay: 0.35s; }
       .hero.three { right: 33%; top: 24%; animation-delay: 0.2s; }
@@ -184,6 +228,14 @@
       .two .body { background: #4361ee; }
       .three .body { background: #ff9f1c; }
       .four .body { background: #2a9d8f; }
+      .one .cape { background: #1d3557; }
+      .two .cape { background: #ffd166; }
+      .three .cape { background: #9d0208; }
+      .four .cape { background: #264653; }
+      .one .mask { background: #1d3557; }
+      .two .mask { background: #ffbe0b; }
+      .three .mask { background: #7b2cbf; }
+      .four .mask { background: #0a9396; }
 
       .ball {
         position: absolute;
@@ -235,32 +287,44 @@
           <div class="ball"></div>
 
           <div class="hero one">
+            <div class="hero-name">Superman</div>
             <div class="head"></div>
-            <div class="body"></div>
+            <div class="mask"></div>
+            <div class="cape"></div>
+            <div class="body"><div class="emblem">S</div></div>
             <div class="racket"></div>
             <div class="leg left"></div>
             <div class="leg right"></div>
           </div>
 
           <div class="hero two">
+            <div class="hero-name">Batman</div>
             <div class="head"></div>
-            <div class="body"></div>
+            <div class="mask"></div>
+            <div class="cape"></div>
+            <div class="body"><div class="emblem">B</div></div>
             <div class="racket"></div>
             <div class="leg left"></div>
             <div class="leg right"></div>
           </div>
 
           <div class="hero three">
+            <div class="hero-name">Spider-Man</div>
             <div class="head"></div>
-            <div class="body"></div>
+            <div class="mask"></div>
+            <div class="cape"></div>
+            <div class="body"><div class="emblem">W</div></div>
             <div class="racket"></div>
             <div class="leg left"></div>
             <div class="leg right"></div>
           </div>
 
           <div class="hero four">
+            <div class="hero-name">Iron Man</div>
             <div class="head"></div>
-            <div class="body"></div>
+            <div class="mask"></div>
+            <div class="cape"></div>
+            <div class="body"><div class="emblem">IM</div></div>
             <div class="racket"></div>
             <div class="leg left"></div>
             <div class="leg right"></div>
