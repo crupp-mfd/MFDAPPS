@@ -125,45 +125,104 @@ body {
 .locomotive {
   position: absolute;
   left: 18px;
-  bottom: 30px;
-  width: 190px;
-  height: 72px;
-  border: 4px solid #1f3043;
-  border-radius: 10px 18px 10px 10px;
-  background: linear-gradient(160deg, #415f7c, #243f5a);
+  bottom: 28px;
+  width: 224px;
+  height: 76px;
+  border: 3px solid #102233;
+  border-radius: 12px;
+  background: linear-gradient(165deg, #274c68 0%, #193447 55%, #1a3a52 100%);
+  box-shadow: inset 0 0 0 2px rgba(90, 152, 190, 0.25);
+  overflow: hidden;
 }
 
-.loco-cab {
+.locomotive::before,
+.locomotive::after {
+  content: "";
   position: absolute;
-  right: 10px;
-  top: -26px;
-  width: 64px;
-  height: 32px;
-  border: 4px solid #1f3043;
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  background: #37546f;
+  top: 0;
+  bottom: 0;
+  width: 22px;
+  background: linear-gradient(180deg, #426683, #20394f);
 }
 
-.loco-window {
-  position: absolute;
-  right: 22px;
-  top: -16px;
-  width: 24px;
-  height: 14px;
-  border-radius: 3px;
-  background: #d9f3ff;
+.locomotive::before {
+  left: -10px;
+  transform: skewX(-16deg);
 }
 
-.loco-chimney {
+.locomotive::after {
+  right: -10px;
+  transform: skewX(16deg);
+}
+
+.loco-roof {
   position: absolute;
-  left: 22px;
-  top: -22px;
-  width: 18px;
+  left: 14px;
+  right: 14px;
+  top: 6px;
+  height: 8px;
+  border-radius: 6px;
+  background: #0d1d29;
+}
+
+.loco-pantograph {
+  position: absolute;
+  left: 94px;
+  top: -6px;
+  width: 36px;
+  height: 18px;
+  border-top: 3px solid #111;
+  border-left: 3px solid #111;
+  border-right: 3px solid #111;
+  transform: skewX(-16deg);
+}
+
+.loco-side-window {
+  position: absolute;
+  top: 18px;
+  width: 20px;
   height: 30px;
-  border: 3px solid #222;
+  border: 2px solid #8ab6cf;
   border-radius: 4px;
-  background: #343434;
+  background: linear-gradient(180deg, #d0ecff, #7ea3ba);
+}
+
+.loco-side-window.left {
+  left: 12px;
+}
+
+.loco-side-window.right {
+  right: 12px;
+}
+
+.loco-stripes {
+  position: absolute;
+  left: 38px;
+  top: 20px;
+  width: 48px;
+  height: 30px;
+  background: repeating-linear-gradient(
+    to right,
+    #18d64d 0 4px,
+    transparent 4px 9px
+  );
+  opacity: 0.85;
+}
+
+.loco-brand {
+  position: absolute;
+  left: 92px;
+  bottom: 14px;
+  color: #dbe6ee;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  font-size: 1.45rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.loco-brand span {
+  font-weight: 300;
+  margin-left: 2px;
 }
 
 .coupler {
@@ -179,68 +238,99 @@ body {
   position: absolute;
   bottom: 28px;
   width: 280px;
-  height: 92px;
-  border-radius: 8px;
-  background: linear-gradient(145deg, #8f3d3d, var(--wagon));
-  border: 4px solid #582424;
-  display: grid;
-  place-items: center;
+  height: 96px;
 }
 
 .coupler-1 {
-  left: 214px;
-}
-
-.coupler-2 {
-  left: 528px;
-}
-
-.coupler-3 {
-  left: 842px;
-}
-
-.wagon-1 {
   left: 248px;
 }
 
-.wagon-2 {
+.coupler-2 {
   left: 562px;
 }
 
-.wagon-3 {
+.coupler-3 {
   left: 876px;
 }
 
-.banner {
-  background: var(--banner);
-  color: var(--banner-text);
-  border: 2px solid #c4b67f;
-  border-radius: 4px;
-  padding: 0.45rem 0.65rem 0.35rem;
-  width: 96%;
-  height: calc(100% - 10px);
+.wagon-1 {
+  left: 282px;
+}
+
+.wagon-2 {
+  left: 596px;
+}
+
+.wagon-3 {
+  left: 910px;
+}
+
+.container {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 0;
+  height: 68px;
+  border-radius: 4px 4px 2px 2px;
+  border: 2px solid rgba(26, 26, 26, 0.65);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
   display: grid;
-  gap: 0.15rem;
-  justify-items: center;
-  align-content: center;
-  text-align: center;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2);
+  place-items: center;
+  background-size: 12px 100%, cover;
 }
 
-.wagon-logo {
-  width: 100%;
-  max-width: none;
-  max-height: 56px;
-  object-fit: contain;
-  display: block;
+.container-red {
+  background:
+    repeating-linear-gradient(
+      to right,
+      rgba(0, 0, 0, 0.25) 0 2px,
+      rgba(0, 0, 0, 0) 2px 12px
+    ),
+    linear-gradient(180deg, #9f4e4e, #7f3535);
 }
 
-.wagon-claim {
+.container-green {
+  background:
+    repeating-linear-gradient(
+      to right,
+      rgba(0, 0, 0, 0.25) 0 2px,
+      rgba(0, 0, 0, 0) 2px 12px
+    ),
+    linear-gradient(180deg, #2f9d45, #1e7a31);
+}
+
+.container-claim {
   margin: 0;
-  font-size: clamp(0.65rem, 1.35vw, 0.9rem);
+  color: #f5f7f6;
+  font-size: clamp(0.7rem, 1.15vw, 0.95rem);
   font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.02em;
+  text-align: center;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+.wagon-chassis {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 8px;
+  height: 16px;
+  border-radius: 2px;
+  border: 1px solid #132433;
+  background:
+    linear-gradient(160deg, rgba(255, 214, 56, 0.9) 0 8px, transparent 8px),
+    linear-gradient(20deg, rgba(255, 214, 56, 0.9) 0 8px, transparent 8px),
+    linear-gradient(180deg, #142838, #0d1a25);
+}
+
+.wagon-brand-logo {
+  position: absolute;
+  left: 8px;
+  top: -2px;
+  width: 88px;
+  height: 20px;
+  object-fit: contain;
+  filter: brightness(0) invert(1);
 }
 
 .wheel {
@@ -262,35 +352,35 @@ body {
 }
 
 .loco-wheel-1 {
-  left: 44px;
+  left: 54px;
 }
 
 .loco-wheel-2 {
-  left: 142px;
+  left: 168px;
 }
 
 .wagon1-wheel-1 {
-  left: 286px;
+  left: 320px;
 }
 
 .wagon1-wheel-2 {
-  left: 458px;
+  left: 492px;
 }
 
 .wagon2-wheel-1 {
-  left: 600px;
+  left: 634px;
 }
 
 .wagon2-wheel-2 {
-  left: 772px;
+  left: 806px;
 }
 
 .wagon3-wheel-1 {
-  left: 914px;
+  left: 948px;
 }
 
 .wagon3-wheel-2 {
-  left: 1086px;
+  left: 1120px;
 }
 
 @keyframes moveTrain {
@@ -311,25 +401,41 @@ body {
 
   .locomotive {
     left: 10px;
-    width: 140px;
+    width: 170px;
     height: 64px;
   }
 
-  .loco-cab {
-    right: 8px;
-    width: 48px;
+  .loco-brand {
+    left: 66px;
+    bottom: 11px;
+    font-size: 1.05rem;
+  }
+
+  .loco-side-window {
+    height: 24px;
+  }
+
+  .loco-stripes {
+    left: 30px;
+    width: 34px;
+    height: 24px;
+  }
+
+  .loco-pantograph {
+    left: 64px;
+    width: 30px;
   }
 
   .coupler-1 {
-    left: 154px;
+    left: 184px;
   }
 
   .coupler-2 {
-    left: 392px;
+    left: 422px;
   }
 
   .coupler-3 {
-    left: 630px;
+    left: 660px;
   }
 
   .wagon {
@@ -339,60 +445,67 @@ body {
   }
 
   .wagon-1 {
-    left: 188px;
+    left: 218px;
   }
 
   .wagon-2 {
-    left: 426px;
+    left: 456px;
   }
 
   .wagon-3 {
-    left: 664px;
+    left: 694px;
   }
 
-  .banner {
-    padding: 0.3rem 0.35rem 0.2rem;
-    width: 97%;
-    height: calc(100% - 8px);
+  .container {
+    left: 6px;
+    right: 6px;
+    height: 56px;
   }
 
-  .wagon-logo {
-    max-height: 46px;
+  .container-claim {
+    font-size: 0.66rem;
   }
 
-  .wagon-claim {
-    font-size: 0.58rem;
+  .wagon-chassis {
+    left: 2px;
+    right: 2px;
+    height: 14px;
+  }
+
+  .wagon-brand-logo {
+    width: 64px;
+    height: 16px;
   }
 
   .loco-wheel-1 {
-    left: 24px;
+    left: 34px;
   }
 
   .loco-wheel-2 {
-    left: 96px;
+    left: 118px;
   }
 
   .wagon1-wheel-1 {
-    left: 210px;
+    left: 240px;
   }
 
   .wagon1-wheel-2 {
-    left: 340px;
+    left: 370px;
   }
 
   .wagon2-wheel-1 {
-    left: 448px;
+    left: 478px;
   }
 
   .wagon2-wheel-2 {
-    left: 578px;
+    left: 608px;
   }
 
   .wagon3-wheel-1 {
-    left: 686px;
+    left: 716px;
   }
 
   .wagon3-wheel-2 {
-    left: 816px;
+    left: 846px;
   }
 }
