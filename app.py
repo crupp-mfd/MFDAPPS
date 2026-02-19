@@ -1,26 +1,122 @@
 #!/usr/bin/env python3
 import argparse
-from datetime import datetime
+from decimal import Decimal
+from datetime import date, datetime, timedelta, timezone
 import errno
 import importlib.util
 import json
+import os
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 import re
+import socket
+import sqlite3
+import subprocess
 import sys
+import time
 from urllib.parse import parse_qs, quote, urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent
-MEHR_ROOT = REPO_ROOT / "apps" / "christian" / "AppMehrkilometer"
+
+
+def _load_env_file(path: Path) -> None:
+    if not path.exists() or not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if value == "":
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        existing = os.environ.get(key)
+        if existing is None or existing.strip() == "":
+            os.environ[key] = value
+
+
+def _load_local_env() -> None:
+    for file_name in (".ENV", ".env"):
+        _load_env_file(REPO_ROOT / file_name)
+
+
+_load_local_env()
+
+
+def _resolve_mehr_root() -> Path:
+    candidates = (
+        REPO_ROOT / "apps" / "christian" / "AppMehrkilometer",
+        REPO_ROOT / "apps" / "Christian" / "AppMehrkilometer",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+MEHR_ROOT = _resolve_mehr_root()
 MEHR_SOURCE_DIR = MEHR_ROOT / "legacy_source" / "Quellen"
 MEHR_OUTPUT_DIR = MEHR_ROOT / "legacy_source" / "Output"
 MEHR_LEGACY_SCRIPT = MEHR_ROOT / "legacy_source" / "Script" / "jahresabrechnung.py"
+MEHR_FABRIC_SQLITE = MEHR_ROOT / "runtime" / "mehrkilometer_fabric.db"
+MEHR_SOURCE_DIRS_ENV = "MEHR_QUELLEN_DIRS"
+MEHR_SOURCE_EXTENSIONS = {".xlsx", ".xlsm", ".xls"}
+MEHR_OUTPUT_PREFIXES = (
+    "vertragsuebersicht_",
+    "einzelabrechnungen_detail_",
+    "special_vertragsuebersicht_",
+    "special_einzelabrechnungen_detail_",
+)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_PORT_TRIES = 20
 DEFAULT_YEAR = 2025
 _LEGACY_XLSX_MODULE = None
+RSRD_BACKEND_HOST = os.getenv("MFDAPPS_RSRD_HOST", "127.0.0.1")
+RSRD_BACKEND_PORT = int(os.getenv("MFDAPPS_RSRD_PORT", "8001"))
+RSRD_API_PREFIXES = (
+    "/api/rsrd2",
+    "/api/meta",
+    "/api/wagons",
+    "/api/spareparts",
+    "/api/objstrk",
+    "/api/renumber",
+    "/api/teilenummer",
+)
+FABRIC_REQUIRED_ENV_VARS = (
+    "FABRIC_SQL_SERVER",
+    "FABRIC_SQL_DATABASE",
+    "FABRIC_CLIENT_ID",
+    "FABRIC_CLIENT_SECRET",
+    "FABRIC_TENANT_ID",
+)
+MEHR_FABRIC_COLUMNS = (
+    "kundennummer",
+    "kundenname",
+    "vertragsnummer",
+    "vertragsposition",
+    "seriennummer",
+    "vertragsstart",
+    "vertragsende",
+    "abrechnungstart",
+    "abrechnungsende",
+    "km_start_datum_echt",
+    "km_ende_datum_echt",
+    "km_abrechnungstart",
+    "km_abrechnungsende",
+    "km_differenz",
+    "km_daten_ok",
+)
 SPECIAL_PRESETS = [
     {
         "customer": "Grampet",
@@ -44,6 +140,552 @@ SPECIAL_PRESETS = [
         "rate_per_wagon_eur": 0.06,
     },
 ]
+
+
+def _is_tcp_reachable(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+def _rsrd_backend_url(path: str, query: str) -> str:
+    suffix = f"?{query}" if query else ""
+    return f"http://{RSRD_BACKEND_HOST}:{RSRD_BACKEND_PORT}{path}{suffix}"
+
+
+def _ensure_rsrd_backend() -> None:
+    if _is_tcp_reachable(RSRD_BACKEND_HOST, RSRD_BACKEND_PORT):
+        return
+
+    preferred_python = Path("/Users/crupp/SPAREPART/.venv/bin/python")
+    python_bin = os.environ.get("MFDAPPS_RSRD_PYTHON")
+    if not python_bin:
+        python_bin = str(preferred_python if preferred_python.exists() else Path(sys.executable))
+
+    env = os.environ.copy()
+    env["MFDAPPS_ENFORCE_ONEDRIVE"] = "0"
+    env["MFDAPPS_HOME"] = str(REPO_ROOT)
+    env["MFDAPPS_RUNTIME_ROOT"] = str(REPO_ROOT / "apps" / "christian" / "data")
+    env["SQLITE_PATH"] = str(REPO_ROOT / "apps" / "christian" / "data" / "cache.db")
+    env["MFDAPPS_CREDENTIALS_DIR"] = str(REPO_ROOT / "credentials")
+    env["MFDAPPS_FRONTEND_DIR"] = str(REPO_ROOT / "apps" / "christian" / "AppRSRD" / "frontend")
+    env["PYTHONPATH"] = (
+        f"{REPO_ROOT}:"
+        f"{REPO_ROOT / 'packages' / 'sparepart-shared' / 'src'}:"
+        f"{REPO_ROOT / 'apps' / 'christian' / 'AppRSRD' / 'src'}"
+    )
+
+    log_path = Path("/tmp/apprsrd-backend.log")
+    with log_path.open("ab") as log_file:
+        subprocess.Popen(
+            [
+                python_bin,
+                "-m",
+                "uvicorn",
+                "app_rsrd.main:app",
+                "--host",
+                RSRD_BACKEND_HOST,
+                "--port",
+                str(RSRD_BACKEND_PORT),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+
+    for _ in range(30):
+        if _is_tcp_reachable(RSRD_BACKEND_HOST, RSRD_BACKEND_PORT):
+            return
+        time.sleep(0.2)
+    raise RuntimeError(
+        "AppRSRD-Backend konnte nicht gestartet werden. Siehe /tmp/apprsrd-backend.log"
+    )
+
+
+def _source_search_dirs() -> list[Path]:
+    configured = os.environ.get(MEHR_SOURCE_DIRS_ENV, "").strip()
+    raw_dirs: list[Path] = []
+    if configured:
+        for entry in configured.split(os.pathsep):
+            text = entry.strip()
+            if not text:
+                continue
+            path = Path(text).expanduser()
+            if not path.is_absolute():
+                path = REPO_ROOT / path
+            raw_dirs.append(path)
+
+    raw_dirs.extend(
+        [
+            MEHR_SOURCE_DIR,
+            MEHR_ROOT / "Quellen",
+            REPO_ROOT / "data" / "mehrkilometer",
+            REPO_ROOT / "data",
+        ]
+    )
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for directory in raw_dirs:
+        resolved = directory.resolve()
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(resolved)
+    return unique
+
+
+def _is_under_directory(path: Path, base_dir: Path) -> bool:
+    try:
+        path.resolve().relative_to(base_dir.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _is_under_any_directory(path: Path, directories: list[Path]) -> bool:
+    return any(_is_under_directory(path, base) for base in directories)
+
+
+def _collect_source_excel_files() -> list[Path]:
+    files: list[Path] = []
+    for base_dir in _source_search_dirs():
+        if not base_dir.exists() or not base_dir.is_dir():
+            continue
+        for candidate in base_dir.rglob("*"):
+            if not candidate.is_file():
+                continue
+            if candidate.suffix.lower() not in MEHR_SOURCE_EXTENSIONS:
+                continue
+            name = candidate.name.lower()
+            if name.startswith("~$"):
+                continue
+            if name.startswith(MEHR_OUTPUT_PREFIXES):
+                continue
+            files.append(candidate.resolve())
+    return files
+
+
+def _guess_source_year(name: str) -> int | None:
+    years = re.findall(r"(20\d{2})", name)
+    if not years:
+        return None
+    try:
+        return max(int(year) for year in years)
+    except ValueError:
+        return None
+
+
+def _source_match_score(path: Path, kind: str, year: int) -> int:
+    name = path.name.lower()
+    stem = path.stem.lower()
+    tokens = [token for token in re.split(r"[^a-z0-9]+", stem) if token]
+    score = 0
+
+    if kind == "overview":
+        if "vorlage" in name:
+            score += 140
+        if "template" in name:
+            score += 60
+        if "kilometer" in name:
+            score -= 120
+    if kind == "kilometer":
+        if "kilometer" in name:
+            score += 140
+        if "vorlage" in name or "template" in name:
+            score -= 120
+    if "km" in tokens:
+        score += 20
+
+    if str(year) in name:
+        score += 50
+    guessed_year = _guess_source_year(name)
+    if guessed_year is not None and guessed_year != year:
+        score -= min(30, abs(year - guessed_year))
+
+    if _is_under_directory(path, MEHR_SOURCE_DIR):
+        score += 30
+    return score
+
+
+def _select_best_source_file(
+    candidates: list[Path], kind: str, year: int, exclude: Path | None = None
+) -> Path | None:
+    ranked: list[tuple[int, float, Path]] = []
+    for candidate in candidates:
+        if exclude is not None and candidate == exclude:
+            continue
+        score = _source_match_score(candidate, kind, year)
+        if score <= 0:
+            continue
+        ranked.append((score, candidate.stat().st_mtime, candidate))
+
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: (item[0], item[1], str(item[2])), reverse=True)
+    return ranked[0][2]
+
+
+def _discover_source_files(year: int) -> tuple[Path | None, Path | None]:
+    candidates = _collect_source_excel_files()
+    source_overview = _select_best_source_file(candidates, "overview", year)
+    source_km = _select_best_source_file(
+        candidates, "kilometer", year, exclude=source_overview
+    )
+    return source_overview, source_km
+
+
+def _source_search_dirs_text() -> str:
+    existing = [str(path) for path in _source_search_dirs() if path.exists()]
+    if not existing:
+        return "(keine vorhandenen Suchordner)"
+    return ", ".join(existing)
+
+
+def _fabric_missing_env() -> list[str]:
+    return [key for key in FABRIC_REQUIRED_ENV_VARS if not os.environ.get(key, "").strip()]
+
+
+def _fabric_server_with_port() -> str:
+    server = os.environ["FABRIC_SQL_SERVER"].strip()
+    if server.startswith("tcp:"):
+        server = server[4:]
+    if "," in server:
+        return f"tcp:{server}"
+    port = os.environ.get("FABRIC_SQL_PORT", "1433").strip() or "1433"
+    return f"tcp:{server},{port}"
+
+
+def _connect_fabric_sql():
+    missing = _fabric_missing_env()
+    if missing:
+        raise RuntimeError(
+            "Fehlende Fabric-Variablen: " + ", ".join(missing) + ". Bitte /Users/crupp/dev/MFDAPPS/.ENV prüfen."
+        )
+
+    try:
+        import pyodbc  # type: ignore
+    except Exception as exc:  # pragma: no cover - env dependent
+        raise RuntimeError(
+            "Python-Paket 'pyodbc' fehlt. Bitte lokal installieren: "
+            "/Users/crupp/dev/MFDAPPS/.venv/bin/pip install pyodbc"
+        ) from exc
+
+    timeout = int((os.environ.get("FABRIC_SQL_TIMEOUT") or "20").strip())
+    driver = (os.environ.get("FABRIC_SQL_DRIVER") or "ODBC Driver 18 for SQL Server").strip()
+    conn_str = (
+        f"Driver={{{driver}}};"
+        f"Server={_fabric_server_with_port()};"
+        f"Database={os.environ['FABRIC_SQL_DATABASE'].strip()};"
+        "Encrypt=yes;"
+        "TrustServerCertificate=no;"
+        "Authentication=ActiveDirectoryServicePrincipal;"
+        f"Authority Id={os.environ['FABRIC_TENANT_ID'].strip()};"
+        f"UID={os.environ['FABRIC_CLIENT_ID'].strip()};"
+        f"PWD={os.environ['FABRIC_CLIENT_SECRET'].strip()};"
+    )
+    try:
+        return pyodbc.connect(conn_str, timeout=timeout)
+    except Exception as exc:
+        raise RuntimeError(f"Fabric SQL Verbindung fehlgeschlagen: {exc}") from exc
+
+
+def _fabric_health_check() -> dict:
+    with _connect_fabric_sql() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT TOP 1 1 AS ok")
+        row = cur.fetchone()
+        return {
+            "status": "ok" if row else "error",
+            "probe": int(row[0]) if row else None,
+            "server": os.environ.get("FABRIC_SQL_SERVER", ""),
+            "database": os.environ.get("FABRIC_SQL_DATABASE", ""),
+        }
+
+
+def _fetch_stagli_scnm(limit: int) -> list[str]:
+    with _connect_fabric_sql() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT TOP ({limit}) SCNM FROM landing.stagli")
+        rows = cur.fetchall()
+        return ["" if row[0] is None else str(row[0]) for row in rows]
+
+
+def _ensure_mehr_fabric_sqlite_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mehrkilometer_fabric_results (
+            year INTEGER NOT NULL,
+            kundennummer TEXT,
+            kundenname TEXT,
+            vertragsnummer TEXT,
+            vertragsposition INTEGER,
+            seriennummer TEXT,
+            vertragsstart INTEGER,
+            vertragsende INTEGER,
+            abrechnungstart INTEGER,
+            abrechnungsende INTEGER,
+            km_start_datum_echt INTEGER,
+            km_ende_datum_echt INTEGER,
+            km_abrechnungstart REAL,
+            km_abrechnungsende REAL,
+            km_differenz REAL,
+            km_daten_ok INTEGER,
+            loaded_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mehrkilometer_fabric_status (
+            year INTEGER PRIMARY KEY,
+            row_count INTEGER NOT NULL,
+            refreshed_at TEXT NOT NULL,
+            sqlite_path TEXT NOT NULL,
+            source_query TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_mehrkilometer_fabric_results_year
+        ON mehrkilometer_fabric_results (year)
+        """
+    )
+
+
+def _build_mehrkilometer_fabric_sql(year: int) -> str:
+    year_start_date = date(year, 1, 1)
+    year_end_date = date(year, 12, 31)
+    year_start = int(year_start_date.strftime("%Y%m%d"))
+    year_end = int(year_end_date.strftime("%Y%m%d"))
+    year_start_minus_1 = int((year_start_date - timedelta(days=1)).strftime("%Y%m%d"))
+
+    return f"""
+WITH vertraege_jahr AS (
+    SELECT
+        ROW_NUMBER() OVER (ORDER BY AGNB, PONR, BANO, FVDT, TEDA) AS vertrag_id,
+        CUPL AS Kundennummer,
+        SCNM AS Kundenname,
+        AGNB AS Vertragsnummer,
+        PONR AS Vertragsposition,
+        BANO AS Seriennummer,
+        FVDT AS Vertragsstart,
+        TEDA AS Vertragsende,
+        CASE
+            WHEN FVDT < {year_start} THEN {year_start}
+            ELSE FVDT
+        END AS Abrechnungstart,
+        CASE
+            WHEN ISNULL(NULLIF(TEDA, 0), {year_end}) > {year_end} THEN {year_end}
+            ELSE ISNULL(NULLIF(TEDA, 0), {year_end})
+        END AS Abrechnungsende
+    FROM landing.stagli
+    WHERE BANO <> ''
+      AND FVDT <= {year_end}
+      AND ISNULL(NULLIF(TEDA, 0), {year_end}) >= {year_start}
+),
+vertraege_mit_suchdatum AS (
+    SELECT
+        v.*,
+        CAST(
+            CONVERT(
+                char(8),
+                DATEADD(day, -1, CONVERT(date, CAST(v.Abrechnungstart AS char(8)), 112)),
+                112
+            ) AS int
+        ) AS Start_KM_Suchdatum
+    FROM vertraege_jahr v
+),
+km_pro_tag AS (
+    SELECT
+        SERIENNUMMER,
+        ZEIT,
+        MAX(KILOMETER) AS Kilometer
+    FROM landing.AWSNOTIFICATIONSHORT
+    WHERE SERIENNUMMER <> ''
+      AND ZEIT > 0
+    GROUP BY SERIENNUMMER, ZEIT
+),
+start_km_ranked AS (
+    SELECT
+        v.vertrag_id,
+        k.ZEIT AS KM_Start_Datum_Echt,
+        k.Kilometer AS KM_Abrechnungstart,
+        ROW_NUMBER() OVER (PARTITION BY v.vertrag_id ORDER BY k.ZEIT ASC) AS rn
+    FROM vertraege_mit_suchdatum v
+    INNER JOIN km_pro_tag k
+        ON k.SERIENNUMMER = v.Seriennummer
+       AND k.ZEIT >= v.Start_KM_Suchdatum
+),
+start_km AS (
+    SELECT
+        vertrag_id,
+        KM_Start_Datum_Echt,
+        KM_Abrechnungstart
+    FROM start_km_ranked
+    WHERE rn = 1
+),
+ende_km_ranked AS (
+    SELECT
+        v.vertrag_id,
+        k.ZEIT AS KM_Ende_Datum_Echt,
+        k.Kilometer AS KM_Abrechnungsende,
+        ROW_NUMBER() OVER (PARTITION BY v.vertrag_id ORDER BY k.ZEIT DESC) AS rn
+    FROM vertraege_mit_suchdatum v
+    INNER JOIN km_pro_tag k
+        ON k.SERIENNUMMER = v.Seriennummer
+       AND k.ZEIT <= v.Abrechnungsende
+),
+ende_km AS (
+    SELECT
+        vertrag_id,
+        KM_Ende_Datum_Echt,
+        KM_Abrechnungsende
+    FROM ende_km_ranked
+    WHERE rn = 1
+)
+SELECT
+    v.Kundennummer,
+    v.Kundenname,
+    v.Vertragsnummer,
+    v.Vertragsposition,
+    v.Seriennummer,
+    v.Vertragsstart,
+    v.Vertragsende,
+    v.Abrechnungstart,
+    v.Abrechnungsende,
+    s.KM_Start_Datum_Echt,
+    e.KM_Ende_Datum_Echt,
+    CASE
+        WHEN s.KM_Start_Datum_Echt >= {year_start_minus_1}
+         AND e.KM_Ende_Datum_Echt BETWEEN {year_start} AND {year_end}
+        THEN s.KM_Abrechnungstart
+        ELSE 0
+    END AS KM_Abrechnungstart,
+    CASE
+        WHEN s.KM_Start_Datum_Echt >= {year_start_minus_1}
+         AND e.KM_Ende_Datum_Echt BETWEEN {year_start} AND {year_end}
+        THEN e.KM_Abrechnungsende
+        ELSE 0
+    END AS KM_Abrechnungsende,
+    CASE
+        WHEN s.KM_Start_Datum_Echt >= {year_start_minus_1}
+         AND e.KM_Ende_Datum_Echt BETWEEN {year_start} AND {year_end}
+         AND s.KM_Abrechnungstart IS NOT NULL
+         AND e.KM_Abrechnungsende IS NOT NULL
+        THEN e.KM_Abrechnungsende - s.KM_Abrechnungstart
+        ELSE 0
+    END AS KM_Differenz,
+    CASE
+        WHEN s.KM_Start_Datum_Echt >= {year_start_minus_1}
+         AND e.KM_Ende_Datum_Echt BETWEEN {year_start} AND {year_end}
+        THEN 1 ELSE 0
+    END AS KM_Daten_OK
+FROM vertraege_mit_suchdatum v
+LEFT JOIN start_km s ON s.vertrag_id = v.vertrag_id
+LEFT JOIN ende_km e ON e.vertrag_id = v.vertrag_id
+"""
+
+
+def _refresh_mehrkilometer_fabric_sqlite(year: int) -> dict:
+    query = _build_mehrkilometer_fabric_sql(year)
+    with _connect_fabric_sql() as conn:
+        cur = conn.cursor()
+        cur.execute(query)
+        rows = cur.fetchall()
+
+    refreshed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    db_path = Path(os.environ.get("MEHR_FABRIC_SQLITE_PATH", str(MEHR_FABRIC_SQLITE))).resolve()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _to_sqlite_value(value):
+        if isinstance(value, Decimal):
+            return float(value)
+        return value
+
+    with sqlite3.connect(db_path) as sqlite_conn:
+        _ensure_mehr_fabric_sqlite_schema(sqlite_conn)
+        sqlite_conn.execute("DELETE FROM mehrkilometer_fabric_results WHERE year = ?", (year,))
+        insert_sql = f"""
+            INSERT INTO mehrkilometer_fabric_results (
+                year,
+                {", ".join(MEHR_FABRIC_COLUMNS)},
+                loaded_at
+            ) VALUES (
+                ?, {", ".join(["?"] * len(MEHR_FABRIC_COLUMNS))}, ?
+            )
+        """
+        payload = [
+            (year, *[_to_sqlite_value(value) for value in row], refreshed_at)
+            for row in rows
+        ]
+        if payload:
+            sqlite_conn.executemany(insert_sql, payload)
+        sqlite_conn.execute(
+            """
+            INSERT INTO mehrkilometer_fabric_status (
+                year, row_count, refreshed_at, sqlite_path, source_query
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(year) DO UPDATE SET
+                row_count=excluded.row_count,
+                refreshed_at=excluded.refreshed_at,
+                sqlite_path=excluded.sqlite_path,
+                source_query=excluded.source_query
+            """,
+            (year, len(rows), refreshed_at, str(db_path), query),
+        )
+        sqlite_conn.commit()
+
+    return {
+        "year": year,
+        "row_count": len(rows),
+        "refreshed_at": refreshed_at,
+        "sqlite_path": str(db_path),
+        "status": "ok",
+    }
+
+
+def _mehrkilometer_fabric_status(year: int) -> dict:
+    db_path = Path(os.environ.get("MEHR_FABRIC_SQLITE_PATH", str(MEHR_FABRIC_SQLITE))).resolve()
+    if not db_path.exists():
+        return {
+            "year": year,
+            "exists": False,
+            "sqlite_path": str(db_path),
+            "row_count": 0,
+            "refreshed_at": None,
+        }
+
+    with sqlite3.connect(db_path) as sqlite_conn:
+        _ensure_mehr_fabric_sqlite_schema(sqlite_conn)
+        row = sqlite_conn.execute(
+            """
+            SELECT row_count, refreshed_at, sqlite_path
+            FROM mehrkilometer_fabric_status
+            WHERE year = ?
+            """,
+            (year,),
+        ).fetchone()
+        if row is None:
+            return {
+                "year": year,
+                "exists": False,
+                "sqlite_path": str(db_path),
+                "row_count": 0,
+                "refreshed_at": None,
+            }
+        return {
+            "year": year,
+            "exists": True,
+            "sqlite_path": str(row[2] or db_path),
+            "row_count": int(row[0] or 0),
+            "refreshed_at": row[1],
+        }
 
 
 def _load_legacy_xlsx_module():
@@ -76,6 +718,63 @@ def _pick_latest_file(directory: Path, predicate) -> Path | None:
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
+def _create_settlement_files(year: int) -> tuple[Path, Path]:
+    module = _load_legacy_xlsx_module()
+    MEHR_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    source_overview, source_km = _discover_source_files(year)
+    if source_overview is None:
+        raise FileNotFoundError(
+            "Vorlagen-Datei nicht gefunden. "
+            f"Durchsuchte Ordner: {_source_search_dirs_text()}"
+        )
+    if source_km is None:
+        raise FileNotFoundError(
+            "Kilometer-Datei nicht gefunden. "
+            f"Durchsuchte Ordner: {_source_search_dirs_text()}"
+        )
+
+    template_rows = module.read_template(source_overview)
+    kilometer_data = module.read_kilometer(source_km, year)
+    overview, details = module.build_overview(template_rows, kilometer_data, year)
+    abrechnungs_sheets = module.build_detail_workbook_sheets(overview, details, year)
+    details_export = [row[:12] for row in details]
+    if not abrechnungs_sheets:
+        abrechnungs_sheets = [
+            module.SheetSpec(
+                name="001_Keine_Daten",
+                data=[["Keine Einzelabrechnungen vorhanden."]],
+                kind="detail",
+                auto_filter=None,
+                tab_color="FFD9EAD3",
+                highlight_rows=set(),
+            )
+        ]
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_file = MEHR_OUTPUT_DIR / f"vertragsuebersicht_{year}_{timestamp}.xlsx"
+    detail_file = MEHR_OUTPUT_DIR / f"einzelabrechnungen_detail_{year}_{timestamp}.xlsx"
+    module.write_xlsx(
+        output_file,
+        [
+            module.SheetSpec(
+                name="Vertragsuebersicht",
+                data=overview,
+                kind="overview",
+                auto_filter="A1:J1",
+            ),
+            module.SheetSpec(
+                name="Wagendetails",
+                data=details_export,
+                kind="wagendetails",
+                auto_filter="A1:L1",
+            ),
+        ],
+    )
+    module.write_xlsx(detail_file, abrechnungs_sheets)
+    return output_file, detail_file
+
+
 def _build_special_template_rows(module) -> list:
     return [
         module.TemplateRow(
@@ -97,12 +796,11 @@ def _create_special_settlement_files(year: int) -> tuple[Path, Path]:
     module = _load_legacy_xlsx_module()
     MEHR_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    source_km = _pick_latest_file(
-        MEHR_SOURCE_DIR, lambda n: n.endswith(".xlsx") and "kilometer" in n
-    )
+    _, source_km = _discover_source_files(year)
     if source_km is None:
         raise FileNotFoundError(
-            f"Kilometerdatei fehlt im Quellen-Ordner: {MEHR_SOURCE_DIR}"
+            "Kilometerdatei fehlt. "
+            f"Durchsuchte Ordner: {_source_search_dirs_text()}"
         )
 
     template_rows = _build_special_template_rows(module)
@@ -194,22 +892,25 @@ class AppHandler(SimpleHTTPRequestHandler):
     def _file_info(self, file_path: Path | None, kind: str) -> dict:
         if file_path is None:
             return {"exists": False}
+        download_url = (
+            f"/api/mehrkilometer/download?kind={quote(kind)}&name={quote(file_path.name)}"
+        )
+        try:
+            rel_path = file_path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+            download_url += f"&rel={quote(rel_path)}"
+        except ValueError:
+            pass
         return {
             "exists": True,
             "name": file_path.name,
-            "download_url": f"/api/mehrkilometer/download?kind={quote(kind)}&name={quote(file_path.name)}",
+            "download_url": download_url,
         }
 
     def _pick_latest(self, directory: Path, predicate) -> Path | None:
         return _pick_latest_file(directory, predicate)
 
     def _build_mehr_payload(self, year: int) -> dict:
-        source_overview = self._pick_latest(
-            MEHR_SOURCE_DIR, lambda n: n.endswith(".xlsx") and "vorlage" in n
-        )
-        source_km = self._pick_latest(
-            MEHR_SOURCE_DIR, lambda n: n.endswith(".xlsx") and "kilometer" in n
-        )
+        source_overview, source_km = _discover_source_files(year)
         output_overview = self._pick_latest(
             MEHR_OUTPUT_DIR,
             lambda n: n.endswith(".xlsx") and n.startswith(f"vertragsuebersicht_{year}_"),
@@ -265,6 +966,13 @@ class AppHandler(SimpleHTTPRequestHandler):
                     special_output_details, "special_output_details"
                 ),
             },
+            "paths": {
+                "output_dir": {
+                    "path": str(MEHR_OUTPUT_DIR),
+                    "browser_url": f"/{MEHR_OUTPUT_DIR.resolve().relative_to(REPO_ROOT.resolve()).as_posix()}/",
+                },
+                "source_dirs": [str(path) for path in _source_search_dirs()],
+            },
         }
 
         if source_overview is None or source_km is None:
@@ -284,24 +992,72 @@ class AppHandler(SimpleHTTPRequestHandler):
                 )
         return payload
 
+    def _safe_repo_relative_file(self, rel_path: str) -> Path | None:
+        if not rel_path or rel_path.startswith("/") or rel_path.startswith("\\"):
+            return None
+        if ".." in rel_path:
+            return None
+        candidate = (REPO_ROOT / rel_path).resolve()
+        try:
+            candidate.relative_to(REPO_ROOT.resolve())
+        except ValueError:
+            return None
+        if not candidate.is_file():
+            return None
+        return candidate
+
+    def _resolve_source_file_for_download(self, filename: str, kind: str) -> Path | None:
+        if "/" in filename or "\\" in filename or ".." in filename:
+            return None
+        candidates = [path for path in _collect_source_excel_files() if path.name == filename]
+        if not candidates:
+            return None
+        year_hint = _guess_source_year(filename) or DEFAULT_YEAR
+        source_kind = "overview" if kind == "source_overview" else "kilometer"
+        return _select_best_source_file(candidates, source_kind, year_hint)
+
+    def _is_allowed_download_file(self, path: Path, kind: str) -> bool:
+        if kind in {"source_overview", "source_kilometer"}:
+            return _is_under_any_directory(path, _source_search_dirs())
+        return _is_under_directory(path, MEHR_OUTPUT_DIR)
+
     def _serve_mehr_download(self, query: dict[str, list[str]]) -> None:
         kind = (query.get("kind") or [""])[0]
         name = (query.get("name") or [""])[0]
+        rel = (query.get("rel") or [""])[0]
 
         dir_map = {
-            "source_overview": MEHR_SOURCE_DIR,
-            "source_kilometer": MEHR_SOURCE_DIR,
             "output_overview": MEHR_OUTPUT_DIR,
             "output_details": MEHR_OUTPUT_DIR,
             "special_output_overview": MEHR_OUTPUT_DIR,
             "special_output_details": MEHR_OUTPUT_DIR,
         }
-        base_dir = dir_map.get(kind)
-        if base_dir is None:
+        if kind not in {
+            "source_overview",
+            "source_kilometer",
+            "output_overview",
+            "output_details",
+            "special_output_overview",
+            "special_output_details",
+        }:
             self._send_json({"detail": "Ungültiger Download-Typ."}, status=400)
             return
 
-        file_path = self._safe_file(base_dir, name)
+        file_path = None
+        if rel:
+            file_path = self._safe_repo_relative_file(rel)
+            if file_path is not None and file_path.name != name:
+                file_path = None
+            if file_path is not None and not self._is_allowed_download_file(file_path, kind):
+                file_path = None
+
+        if file_path is None and kind in {"source_overview", "source_kilometer"}:
+            file_path = self._resolve_source_file_for_download(name, kind)
+
+        if file_path is None and kind in dir_map:
+            base_dir = dir_map[kind]
+            file_path = self._safe_file(base_dir, name)
+
         if file_path is None:
             self._send_json({"detail": "Datei nicht gefunden."}, status=404)
             return
@@ -324,9 +1080,37 @@ class AppHandler(SimpleHTTPRequestHandler):
         query = parse_qs(parsed.query)
         path = parsed.path
 
+        if path == "/apps/christian/AppRSRD" or path.startswith("/apps/christian/AppRSRD/"):
+            try:
+                _ensure_rsrd_backend()
+                self.send_response(302)
+                self.send_header("Location", _rsrd_backend_url(path, parsed.query))
+                self.end_headers()
+            except Exception as exc:
+                self._send_json({"detail": str(exc)}, status=502)
+            return
+
+        if any(path.startswith(prefix) for prefix in RSRD_API_PREFIXES):
+            try:
+                _ensure_rsrd_backend()
+                self.send_response(307)
+                self.send_header("Location", _rsrd_backend_url(path, parsed.query))
+                self.end_headers()
+            except Exception as exc:
+                self._send_json({"detail": str(exc)}, status=502)
+            return
+
         if path == "/apps/christian/AppMehrkilometer/":
             self.send_response(302)
             self.send_header("Location", "/apps/christian/AppMehrkilometer/frontend/")
+            self.end_headers()
+            return
+
+        if path == "/apps/christian/AppTeilenummer/":
+            self.send_response(302)
+            self.send_header(
+                "Location", "/apps/christian/AppTeilenummer/frontend/teilenummer.html"
+            )
             self.end_headers()
             return
 
@@ -346,6 +1130,46 @@ class AppHandler(SimpleHTTPRequestHandler):
             self._send_json(self._build_mehr_payload(year))
             return
 
+        if path == "/api/mehrkilometer/fabric/health":
+            try:
+                self._send_json(_fabric_health_check())
+            except Exception as exc:
+                self._send_json({"detail": str(exc)}, status=500)
+            return
+
+        if path == "/api/mehrkilometer/fabric/status":
+            year_raw = (query.get("year") or [""])[0]
+            try:
+                year = int(year_raw) if year_raw else DEFAULT_YEAR
+            except ValueError:
+                year = DEFAULT_YEAR
+            year = max(2000, min(3000, year))
+            try:
+                self._send_json(_mehrkilometer_fabric_status(year))
+            except Exception as exc:
+                self._send_json({"detail": str(exc)}, status=500)
+            return
+
+        if path == "/api/mehrkilometer/fabric/stagli":
+            raw_limit = (query.get("limit") or ["100"])[0]
+            try:
+                limit = int(raw_limit)
+            except ValueError:
+                limit = 100
+            limit = max(1, min(5000, limit))
+            try:
+                values = _fetch_stagli_scnm(limit)
+                self._send_json(
+                    {
+                        "count": len(values),
+                        "query": f"SELECT TOP ({limit}) SCNM FROM landing.stagli",
+                        "rows": values,
+                    }
+                )
+            except Exception as exc:
+                self._send_json({"detail": str(exc)}, status=500)
+            return
+
         if path == "/api/mehrkilometer/download":
             self._serve_mehr_download(query)
             return
@@ -356,6 +1180,16 @@ class AppHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         path = parsed.path
+
+        if any(path.startswith(prefix) for prefix in RSRD_API_PREFIXES):
+            try:
+                _ensure_rsrd_backend()
+                self.send_response(307)
+                self.send_header("Location", _rsrd_backend_url(path, parsed.query))
+                self.end_headers()
+            except Exception as exc:
+                self._send_json({"detail": str(exc)}, status=502)
+            return
 
         if path == "/api/mehrkilometer/create-special":
             year_raw = (query.get("year") or [""])[0]
@@ -389,6 +1223,21 @@ class AppHandler(SimpleHTTPRequestHandler):
             self._send_json(payload)
             return
 
+        if path == "/api/mehrkilometer/fabric/import":
+            year_raw = (query.get("year") or [""])[0]
+            try:
+                year = int(year_raw) if year_raw else DEFAULT_YEAR
+            except ValueError:
+                year = DEFAULT_YEAR
+            year = max(2000, min(3000, year))
+            try:
+                payload = _refresh_mehrkilometer_fabric_sqlite(year)
+            except Exception as exc:
+                self._send_json({"detail": str(exc)}, status=500)
+                return
+            self._send_json(payload)
+            return
+
         if path == "/api/mehrkilometer/create":
             year_raw = (query.get("year") or [""])[0]
             try:
@@ -396,11 +1245,20 @@ class AppHandler(SimpleHTTPRequestHandler):
             except ValueError:
                 year = DEFAULT_YEAR
             year = max(2000, min(3000, year))
+            try:
+                created_overview, created_details = _create_settlement_files(year)
+            except Exception as exc:
+                self._send_json(
+                    {"detail": f"Abrechnung fehlgeschlagen: {exc}"},
+                    status=500,
+                )
+                return
+
             payload = self._build_mehr_payload(year)
-            payload["warning"] = (
-                "Lokaler Modus: Es wird keine neue Abrechnung berechnet, "
-                "es werden vorhandene Dateien angezeigt."
-            )
+            payload["outputs"] = {
+                "overview": self._file_info(created_overview, "output_overview"),
+                "details": self._file_info(created_details, "output_details"),
+            }
             self._send_json(payload)
             return
 

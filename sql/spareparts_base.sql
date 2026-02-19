@@ -1,0 +1,13 @@
+select 
+A.BIRT as 'ID',
+A.ITNO as 'BAUREIHE',
+A.ITNO as 'ITNO',
+A.SERN as 'SERIENNUMMER',
+A.ALII as 'WAGEN-TYP',
+A.EQTP as 'TEILEART',
+C.WHLO as 'LAGERORT',
+C.WHSL as 'LAGERPLATZ'
+from MILOIN A
+LEFT OUTER JOIN OCUSMA B on A.CUNO = B.CUNO and B.CONO = '860'
+LEFT OUTER JOIN MITLOC C on A.ITNO = C.ITNO and A.SERN = C.BANO and C.CONO = '860'
+where A.EQTP <> '100' and A.STAT = '20' and A.CONO = '860' and C.WHLO <> '' and C.WHSL <> ''

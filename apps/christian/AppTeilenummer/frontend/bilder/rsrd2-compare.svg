@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Vergleichen">
+  <rect x="6" y="10" width="22" height="44" rx="4" fill="#0B2447" opacity="0.85"/>
+  <rect x="36" y="10" width="22" height="44" rx="4" fill="#1E8A62" opacity="0.85"/>
+  <path d="M28 20 H36" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round"/>
+  <path d="M28 32 H36" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round"/>
+  <path d="M28 44 H36" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round"/>
+</svg>

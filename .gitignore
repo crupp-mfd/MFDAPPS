@@ -20,3 +20,14 @@ local.settings.json
 
 # Misc
 .env
+.ENV
+
+# Local credentials/runtime (must stay inside this repo locally)
+credentials/**
+!credentials/.gitkeep
+!credentials/README.md
+!credentials/*/.gitkeep
+data/cache.db
+data/*.db
+data/*.log
+apps/christian/AppMehrkilometer/runtime/*.db

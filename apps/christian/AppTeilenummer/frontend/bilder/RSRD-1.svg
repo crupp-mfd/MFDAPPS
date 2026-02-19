@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600" role="img" aria-label="Zug fährt in eine Datenbank">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#101a2d"/>
+    </linearGradient>
+
+    <linearGradient id="trainBody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e9eef8"/>
+      <stop offset="1" stop-color="#cfd9ee"/>
+    </linearGradient>
+
+    <linearGradient id="dbBody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a6fff"/>
+      <stop offset="1" stop-color="#0f3ea6"/>
+    </linearGradient>
+
+    <linearGradient id="dbShade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="rgba(255,255,255,0.22)"/>
+      <stop offset="1" stop-color="rgba(255,255,255,0)"/>
+    </linearGradient>
+
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+
+    <clipPath id="dbClip">
+      <path d="M820,150
+               C820,115 925,90 1030,90
+               C1135,90 1240,115 1240,150
+               L1240,420
+               C1240,455 1135,480 1030,480
+               C925,480 820,455 820,420
+               Z"/>
+    </clipPath>
+
+    <mask id="fadeIntoDb">
+      <rect x="0" y="0" width="1200" height="600" fill="white"/>
+      <linearGradient id="fadeGrad" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="white"/>
+        <stop offset="0.55" stop-color="white"/>
+        <stop offset="0.85" stop-color="black"/>
+        <stop offset="1" stop-color="black"/>
+      </linearGradient>
+      <rect x="710" y="140" width="220" height="340" fill="url(#fadeGrad)"/>
+    </mask>
+
+    <!-- Badge styles -->
+    <filter id="badgeShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="600" fill="url(#bg)"/>
+
+  <!-- Track -->
+  <g filter="url(#softShadow)">
+    <rect x="80" y="405" width="820" height="26" rx="13" fill="#2a3550"/>
+    <rect x="90" y="411" width="800" height="4" rx="2" fill="#465a86" opacity="0.8"/>
+    <rect x="90" y="423" width="800" height="4" rx="2" fill="#465a86" opacity="0.6"/>
+
+    <g opacity="0.35">
+      <rect x="120" y="396" width="16" height="44" rx="6" fill="#0d1426"/>
+      <rect x="180" y="396" width="16" height="44" rx="6" fill="#0d1426"/>
+      <rect x="240" y="396" width="16" height="44" rx="6" fill="#0d1426"/>
+      <rect x="300" y="396" width="16" height="44" rx="6" fill="#0d1426"/>
+      <rect x="360" y="396" width="16" height="44" rx="6" fill="#0d1426"/>
+      <rect x="420" y="396" width="16" height="44" rx="6" fill="#0d1426"/>
+      <rect x="480" y="396" width="16" height="44" rx="6" fill="#0d1426"/>
+      <rect x="540" y="396" width="16" height="44" rx="6" fill="#0d1426"/>
+      <rect x="600" y="396" width="16" height="44" rx="6" fill="#0d1426"/>
+      <rect x="660" y="396" width="16" height="44" rx="6" fill="#0d1426"/>
+      <rect x="720" y="396" width="16" height="44" rx="6" fill="#0d1426"/>
+      <rect x="780" y="396" width="16" height="44" rx="6" fill="#0d1426"/>
+      <rect x="840" y="396" width="16" height="44" rx="6" fill="#0d1426"/>
+    </g>
+  </g>
+
+  <!-- Database (right) -->
+  <g transform="translate(-40,0)" filter="url(#softShadow)">
+    <path d="M860,150
+             C860,120 955,98 1070,98
+             C1185,98 1280,120 1280,150
+             L1280,420
+             C1280,450 1185,472 1070,472
+             C955,472 860,450 860,420
+             Z" fill="url(#dbBody)"/>
+
+    <ellipse cx="1070" cy="150" rx="210" ry="56" fill="#2a86ff" opacity="0.95"/>
+    <ellipse cx="1070" cy="150" rx="210" ry="56" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="3"/>
+
+    <path d="M860,240 C860,270 955,292 1070,292 C1185,292 1280,270 1280,240" fill="none" stroke="rgba(255,255,255,0.28)" stroke-width="4"/>
+    <path d="M860,330 C860,360 955,382 1070,382 C1185,382 1280,360 1280,330" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="4"/>
+
+    <path d="M885,165
+             C910,142 970,126 1040,121
+             L1040,460
+             C965,454 905,438 885,415
+             Z" fill="url(#dbShade)" opacity="0.9"/>
+
+    <g clip-path="url(#dbClip)">
+      <rect x="820" y="210" width="170" height="210" rx="50" fill="rgba(8,10,18,0.72)"/>
+      <ellipse cx="905" cy="210" rx="85" ry="28" fill="rgba(8,10,18,0.74)"/>
+      <ellipse cx="905" cy="420" rx="85" ry="28" fill="rgba(8,10,18,0.55)"/>
+      <rect x="838" y="228" width="134" height="174" rx="44" fill="rgba(138,180,255,0.12)"/>
+    </g>
+  </g>
+
+  <!-- Arrow into DB (keine Texte) -->
+  <g opacity="0.9">
+    <path d="M690 310H800" stroke="#8ab4ff" stroke-width="10" stroke-linecap="round"/>
+    <path d="M800 310L772 292M800 310L772 328" stroke="#8ab4ff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Train (left -> right) -->
+  <g filter="url(#softShadow)" mask="url(#fadeIntoDb)">
+    <g transform="translate(120,240)">
+      <rect x="0" y="70" width="540" height="150" rx="26" fill="url(#trainBody)"/>
+      <path d="M540,90
+               C605,98 650,125 670,160
+               C650,195 605,222 540,230
+               Z" fill="url(#trainBody)"/>
+      <path d="M540,95
+               C595,105 630,128 647,160
+               C630,192 595,215 540,225
+               Z" fill="#b9c7e6" opacity="0.55"/>
+
+      <rect x="20" y="86" width="500" height="12" rx="6" fill="#2a86ff" opacity="0.85"/>
+      <rect x="20" y="176" width="610" height="12" rx="6" fill="#2a86ff" opacity="0.75"/>
+
+      <g opacity="0.95">
+        <rect x="55" y="115" width="70" height="40" rx="10" fill="#0b1220"/>
+        <rect x="140" y="115" width="70" height="40" rx="10" fill="#0b1220"/>
+        <rect x="225" y="115" width="70" height="40" rx="10" fill="#0b1220"/>
+        <rect x="310" y="115" width="70" height="40" rx="10" fill="#0b1220"/>
+        <rect x="395" y="115" width="70" height="40" rx="10" fill="#0b1220"/>
+      </g>
+
+      <circle cx="632" cy="160" r="12" fill="#ffe9a6"/>
+      <circle cx="632" cy="160" r="22" fill="rgba(255,233,166,0.18)"/>
+
+      <rect x="30" y="210" width="610" height="24" rx="12" fill="#2a3550"/>
+
+      <g>
+        <circle cx="95" cy="236" r="22" fill="#0b1220"/>
+        <circle cx="95" cy="236" r="10" fill="#6e7fa6"/>
+        <circle cx="215" cy="236" r="22" fill="#0b1220"/>
+        <circle cx="215" cy="236" r="10" fill="#6e7fa6"/>
+        <circle cx="335" cy="236" r="22" fill="#0b1220"/>
+        <circle cx="335" cy="236" r="10" fill="#6e7fa6"/>
+        <circle cx="455" cy="236" r="22" fill="#0b1220"/>
+        <circle cx="455" cy="236" r="10" fill="#6e7fa6"/>
+        <circle cx="575" cy="236" r="22" fill="#0b1220"/>
+        <circle cx="575" cy="236" r="10" fill="#6e7fa6"/>
+      </g>
+
+      <rect x="-16" y="208" width="26" height="18" rx="6" fill="#1c2740" opacity="0.9"/>
+
+      <!-- Badges: nur "MFD" und "RSRD" -->
+      <g filter="url(#badgeShadow)" font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif" font-weight="800" text-anchor="middle">
+        <!-- MFD badge -->
+        <rect x="60" y="88" width="88" height="34" rx="12" fill="#19c37d" opacity="0.95"/>
+        <text x="104" y="112" font-size="16" fill="rgba(8,10,18,0.92)">MFD</text>
+
+        <!-- RSRD badge -->
+        <rect x="160" y="88" width="108" height="34" rx="12" fill="#8ab4ff" opacity="0.95"/>
+        <text x="214" y="112" font-size="16" fill="rgba(8,10,18,0.92)">RSRD</text>
+      </g>
+
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MFD Automation</title>
+    <link rel="stylesheet" href="./ids-enterprise.css?v=2" />
+    <link rel="stylesheet" href="./styles.css?v=45" />
+  </head>
+  <body data-default-module="rsrd2">
+    <div id="loaderOverlay" class="loader-overlay hidden">
+      <section class="card loader-card" id="loaderPanel">
+        <h1>MFD Rail</h1>
+        <p class="subtitle" id="loaderSubtitle">Objektstrukturtausch</p>
+        <div class="status-line" id="statusText">VERBINDE ...</div>
+        <div class="loader-random-image hidden" id="loaderRandomImageWrap">
+          <img id="loaderRandomImage" alt="Statusbild" />
+        </div>
+        <div class="loader-steps hidden" id="loaderSteps">
+          <div class="loader-steps-title">Ablauf</div>
+          <div class="loader-steps-content">
+            <ol class="loader-steps-list" id="loaderStepsList"></ol>
+            <div class="loader-steps-image hidden" id="loaderStepImageWrap">
+              <img id="loaderStepImage" alt="Schrittbild" />
+            </div>
+          </div>
+        </div>
+        <div class="loader-io hidden" id="loaderIo">
+          <div class="loader-io-row">
+            <span class="loader-io-label">Quelle</span>
+            <span class="loader-io-value" id="loaderSource">-</span>
+          </div>
+          <div class="loader-io-row">
+            <span class="loader-io-label">Ziel</span>
+            <span class="loader-io-value" id="loaderTarget">-</span>
+          </div>
+        </div>
+        <div class="progress-wrapper">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <div class="progress-detail" id="progressDetail">0&nbsp;/&nbsp;0</div>
+      </section>
+    </div>
+    <header class="m3-header">
+      <div class="header-left">
+        <div class="menu-wrapper">
+          <button class="menu-btn" id="mainMenuBtn" aria-label="Menü">
+            <span></span><span></span><span></span>
+          </button>
+          <div class="menu-dropdown hidden" id="mainMenu">
+            <button type="button" class="menu-item" data-module="sparepart">1. Objektstrukturtausch</button>
+            <button type="button" class="menu-item menu-item--active" data-module="rsrd2">2. RSRD2 Sync</button>
+            <button type="button" class="menu-item" data-page="/apps/christian/">3. Bremsenumbau</button>
+            <button type="button" class="menu-item" data-page="/apps/christian/AppTeilenummer/frontend/teilenummer.html">4. Teilenummer ändern</button>
+          </div>
+        </div>
+        <div>
+          <div class="app-title" id="moduleTitle">MFD Automation</div>
+          <div class="app-subtitle" id="moduleSubtitle">MFDApps &middot; Objektstrukturtausch</div>
+        </div>
+      </div>
+      <div class="env-switch-group" id="envSwitchGroup">
+        <div class="env-switch-block">
+          <span class="env-switch-title">ERP</span>
+          <div class="env-switch" id="envSwitch" data-env="live">
+            <span class="env-label env-label--test">TEST</span>
+            <button id="envToggle" class="env-toggle" type="button" aria-label="ERP Umgebung wechseln">
+              <span class="env-toggle-handle"></span>
+            </button>
+            <span class="env-label env-label--live">LIVE</span>
+          </div>
+        </div>
+        <div class="env-switch-block">
+          <span class="env-switch-title">RSRD</span>
+          <div class="env-switch" id="rsrdEnvSwitch" data-env="live">
+            <span class="env-label env-label--test">TEST</span>
+            <button id="rsrdEnvToggle" class="env-toggle" type="button" aria-label="RSRD Umgebung wechseln">
+              <span class="env-toggle-handle"></span>
+            </button>
+            <span class="env-label env-label--live">LIVE</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-right" id="headerSearch">
+        <input class="search-field" id="fulltextSearch" type="text" placeholder="Volltextsuche ..." />
+      </div>
+    </header>
+    <main>
+      <div id="sparepartModule">
+        <div class="layout" id="wagonsView">
+          <section class="card filter-card" id="filterPanel">
+            <div class="filter-grid">
+              <div class="filter-field">
+                <label class="filter-label" for="customerFilter">Kundennummer</label>
+                <div class="combo">
+                  <input id="customerFilter" list="customerNumbers" type="text" placeholder="z.B. 100020" autocomplete="off" />
+                </div>
+                <datalist id="customerNumbers"></datalist>
+              </div>
+              <div class="filter-field">
+                <label class="filter-label" for="customerNameFilter">Kundenname</label>
+                <div class="combo">
+                  <input id="customerNameFilter" list="customerNames" type="text" placeholder="z.B. Rail Cargo ..." autocomplete="off" />
+                </div>
+                <datalist id="customerNames"></datalist>
+              </div>
+              <div class="filter-field">
+                <label class="filter-label" for="itemFilter">Baureihe</label>
+                <div class="combo">
+                  <input id="itemFilter" list="itemNumbers" type="text" placeholder="z.B. SGNS_M13" autocomplete="off" />
+                </div>
+                <datalist id="itemNumbers"></datalist>
+              </div>
+              <div class="filter-field">
+                <label class="filter-label" for="typeFilter">Typ</label>
+                <div class="combo">
+                  <input id="typeFilter" list="typeOptions" type="text" placeholder="z.B. 40&#39; 4-achsig SS-Bremse" autocomplete="off" />
+                </div>
+                <datalist id="typeOptions"></datalist>
+              </div>
+              <div class="filter-field">
+                <label class="filter-label" for="serialFilter">Seriennummer</label>
+                <div class="combo">
+                  <input id="serialFilter" list="serialOptions" type="text" placeholder="z.B. 31 80 4564 ..." autocomplete="off" />
+                </div>
+                <datalist id="serialOptions"></datalist>
+              </div>
+              <div class="filter-field">
+                <label class="filter-label" for="facilityFilter">Standort</label>
+                <div class="combo">
+                  <input id="facilityFilter" list="facilityOptions" type="text" placeholder="z.B. B00" autocomplete="off" />
+                </div>
+                <datalist id="facilityOptions"></datalist>
+              </div>
+              <div class="filter-field">
+                <label class="filter-label" for="binFilter">Lagerort</label>
+                <div class="combo">
+                  <input id="binFilter" list="binOptions" type="text" placeholder="z.B. 100024" autocomplete="off" />
+                </div>
+                <datalist id="binOptions"></datalist>
+              </div>
+              <div class="filter-field filter-clear">
+                <label class="filter-label">&nbsp;</label>
+                <div class="combo">
+                  <button
+                    id="clearFiltersBtn"
+                    class="filter-clear-btn"
+                    type="button"
+                    title="Alle Filter löschen"
+                    aria-label="Alle Filter löschen"
+                  >
+                    X
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section class="card table-card hidden" id="tablePanel">
+            <header class="table-header">
+              <div>
+                <h2>Wagenübersicht</h2>
+                <p id="countInfo"></p>
+              </div>
+              <div class="table-actions">
+                <button id="openSwapDbFromWagons" class="link-button" type="button">Zur Tauschdatenbank</button>
+                <button id="reloadBtn" class="ids-button primary reload-button">Neu laden</button>
+                <div class="page-size-control">
+                  <label class="page-size-label" for="pageSizeSelect">Zeilen</label>
+                  <select id="pageSizeSelect" class="page-size-select" aria-label="Zeilen pro Seite">
+                    <option value="10">10</option>
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                  </select>
+                </div>
+                <div class="pagination">
+                  <button id="prevPage" class="ids-button tertiary" disabled>&lsaquo; Zurück</button>
+                  <span id="paginationInfo">Seite 1</span>
+                  <button id="nextPage" class="ids-button tertiary" disabled>Weiter &rsaquo;</button>
+                </div>
+              </div>
+            </header>
+            <div class="table-wrapper">
+              <table class="ids-data-table">
+                <thead id="tableHead"></thead>
+                <tbody id="tableBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+        <div class="layout hidden" id="objstrkView">
+          <section class="card table-card" id="objstrkCard">
+            <header class="table-header objstrk-header">
+              <div>
+                <h2>Objektstruktur</h2>
+                <p id="objstrkMeta" class="objstrk-meta"></p>
+                <button id="backToWagonsBtn" class="ids-button tertiary objstrk-back-btn" type="button">
+                  Zurück zur Übersicht
+                </button>
+              </div>
+              <div class="objstrk-controls">
+                <div class="objstrk-actions">
+                  <button id="openSwapDbFromObj" class="link-button" type="button">Zur Tauschdatenbank</button>
+                  <button id="collapseAllBtn" class="ids-button tertiary" type="button">Alles einklappen</button>
+                  <button id="expandAllBtn" class="ids-button tertiary" type="button">Alles ausklappen</button>
+                </div>
+              </div>
+            </header>
+            <div class="table-wrapper">
+              <table class="ids-data-table">
+                <thead id="objstrkHead"></thead>
+                <tbody id="objstrkBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+        <div class="layout hidden" id="swapView">
+          <section class="card table-card" id="swapCard">
+            <header class="table-header">
+              <div>
+                <h2>Tausch-Datenbank</h2>
+                <p id="swapCountInfo" class="objstrk-meta"></p>
+              </div>
+              <div class="table-actions">
+                <button id="swapBackBtn" class="ids-button tertiary" type="button">Zurück zur Übersicht</button>
+                <button id="swapSelectAllBtn" class="ids-button tertiary" type="button">Alles markieren</button>
+                <button id="swapClearSelectionBtn" class="ids-button tertiary" type="button">Nichts markieren</button>
+                <button id="swapExecuteBtn" class="ids-button primary reload-button" type="button">TAUSCH DURCHFÜHREN</button>
+              </div>
+            </header>
+            <div class="table-wrapper">
+              <table class="ids-data-table">
+                <thead>
+                  <tr>
+                    <th>Baureihe</th>
+                    <th>Wagen-SerNr</th>
+                    <th>Original TeileNr</th>
+                    <th>Original SerNr</th>
+                    <th>Neu-ArtNr</th>
+                    <th>Neu-SerNr</th>
+                    <th>User</th>
+                    <th>Zeitstempel</th>
+                    <th>Tausch</th>
+                    <th>Löschen</th>
+                  </tr>
+                </thead>
+                <tbody id="swapTableBody"></tbody>
+              </table>
+            </div>
+            <div class="table-actions swap-pagination">
+              <div class="pagination">
+                <button id="swapPrevPage" class="ids-button tertiary" type="button">&lsaquo; Zurück</button>
+                <span id="swapPaginationInfo">Seite 1</span>
+                <button id="swapNextPage" class="ids-button tertiary" type="button">Weiter &rsaquo;</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+      <div id="rsrd2Module" class="layout hidden">
+        <section class="card rsrd2-overview-card">
+          <div class="rsrd2-header">
+            <div>
+              <h2>RSRD2 Sync</h2>
+              <p class="rsrd2-subtitle">Wagenübersicht &amp; Vergleich</p>
+            </div>
+            <div class="rsrd2-actions">
+              <button id="rsrd2LoadErpBtn" class="ids-button tertiary" type="button">Wagennummern aus ERP laden</button>
+              <button id="rsrd2LoadErpFullBtn" class="ids-button tertiary" type="button">Wagenattribute aus ERP laden</button>
+              <button id="rsrd2FetchJsonBtn" class="ids-button tertiary" type="button">JSON aus RSRD laden</button>
+              <button id="rsrd2ProcessJsonBtn" class="ids-button primary" type="button">JSON verarbeiten</button>
+            </div>
+          </div>
+
+          <div class="rsrd2-filters">
+            <label>
+              <span>Seriennummer</span>
+              <input id="rsrd2FilterSern" type="text" placeholder="Suche ..." autocomplete="off" list="rsrd2FilterSernOptions" />
+              <datalist id="rsrd2FilterSernOptions"></datalist>
+            </label>
+            <label>
+              <span>Baureihe</span>
+              <input
+                id="rsrd2FilterBaureihe"
+                type="text"
+                placeholder="Suche ..."
+                autocomplete="off"
+                list="rsrd2FilterBaureiheOptions"
+              />
+              <datalist id="rsrd2FilterBaureiheOptions"></datalist>
+            </label>
+            <label>
+              <span>Halter</span>
+              <input
+                id="rsrd2FilterHalter"
+                type="text"
+                placeholder="Suche ..."
+                autocomplete="off"
+                list="rsrd2FilterHalterOptions"
+              />
+              <datalist id="rsrd2FilterHalterOptions"></datalist>
+            </label>
+            <label>
+              <span>Wagen Typ</span>
+              <input id="rsrd2FilterUic" type="text" placeholder="Suche ..." autocomplete="off" list="rsrd2FilterUicOptions" />
+              <datalist id="rsrd2FilterUicOptions"></datalist>
+            </label>
+            <label class="rsrd2-filter-inline">
+              <span>Status</span>
+              <div class="rsrd2-filter-inline-controls">
+                <select id="rsrd2FilterStatus" aria-label="RSRD Status">
+                  <option value="">Alle</option>
+                  <option value="green">Grün (RSRD vorhanden)</option>
+                  <option value="red">Rot (fehlt in RSRD)</option>
+                </select>
+                <button id="rsrd2ClearFiltersBtn" class="ids-button tertiary rsrd2-clear-btn" type="button">
+                  Filter löschen
+                </button>
+                <button id="rsrd2GoBtn" class="rsrd2-go-btn rsrd2-go-btn--idle" type="button">GO</button>
+              </div>
+            </label>
+          </div>
+
+          <div class="rsrd2-bulk">
+            <div class="rsrd2-bulk-label">Für aktuellen Filter setzen</div>
+            <div class="rsrd2-bulk-actions">
+              <label>
+                <span>Sync Daten</span>
+                <div class="rsrd2-bulk-control">
+                  <select id="rsrd2BulkData" class="rsrd2-env-select">
+                    <option value="N">N</option>
+                    <option value="T">T</option>
+                    <option value="P">P</option>
+                  </select>
+                  <button id="rsrd2BulkDataBtn" class="ids-button tertiary" type="button">Setzen</button>
+                </div>
+              </label>
+              <label>
+                <span>Sync KM</span>
+                <div class="rsrd2-bulk-control">
+                  <select id="rsrd2BulkKm" class="rsrd2-env-select">
+                    <option value="N">N</option>
+                    <option value="T">T</option>
+                    <option value="P">P</option>
+                  </select>
+                  <button id="rsrd2BulkKmBtn" class="ids-button tertiary" type="button">Setzen</button>
+                </div>
+              </label>
+              <label>
+                <span>Sync Docs</span>
+                <div class="rsrd2-bulk-control">
+                  <select id="rsrd2BulkDocs" class="rsrd2-env-select">
+                    <option value="N">N</option>
+                    <option value="T">T</option>
+                    <option value="P">P</option>
+                  </select>
+                  <button id="rsrd2BulkDocsBtn" class="ids-button tertiary" type="button">Setzen</button>
+                </div>
+              </label>
+              <label>
+                <span>1x Übertragen</span>
+                <div class="rsrd2-bulk-control">
+                  <select id="rsrd2BulkTransfer" class="rsrd2-transfer-select">
+                    <option value="N">N</option>
+                    <option value="J">J</option>
+                  </select>
+                  <button id="rsrd2BulkTransferBtn" class="ids-button tertiary" type="button">Setzen</button>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="rsrd2-table-header">
+            <div>
+              <h3 id="rsrd2OverviewTitle">Wagenübersicht</h3>
+              <p id="rsrd2CountInfo">Noch keine Daten geladen.</p>
+            </div>
+            <div class="rsrd2-table-actions">
+              <div class="page-size-control">
+                <label class="page-size-label" for="rsrd2PageSizeSelect">Zeilen</label>
+                <select id="rsrd2PageSizeSelect" class="page-size-select" aria-label="Zeilen pro Seite">
+                  <option value="10">10</option>
+                  <option value="25" selected>25</option>
+                  <option value="50">50</option>
+                </select>
+              </div>
+              <div class="pagination">
+                <button id="rsrd2PrevPage" class="ids-button tertiary" disabled>&lsaquo; Zurück</button>
+                <span id="rsrd2PaginationInfo">Seite 1</span>
+                <button id="rsrd2NextPage" class="ids-button tertiary" disabled>Weiter &rsaquo;</button>
+              </div>
+            </div>
+          </div>
+          <div class="table-wrapper">
+            <table class="ids-data-table rsrd2-table">
+              <thead>
+                <tr>
+                  <th>Seriennummer</th>
+                  <th>Baureihe</th>
+                  <th>Wagen Typ</th>
+                  <th>Halter</th>
+                  <th>Sync Daten</th>
+                  <th>Sync KM</th>
+                  <th>Sync Docs</th>
+                  <th>1x Übertragen</th>
+                  <th>Vergleichen</th>
+                </tr>
+              </thead>
+              <tbody id="rsrd2TableBody"></tbody>
+            </table>
+          </div>
+
+          <p id="rsrd2Status" class="rsrd2-status">Noch keine Wagennummern geladen.</p>
+          <div id="rsrd2Log" class="rsrd2-log rsrd2-log-empty" aria-live="polite"></div>
+        </section>
+      </div>
+    </main>
+    <div id="partsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="partsModalTitle">
+      <div class="modal-inner">
+        <header class="modal-header">
+          <div>
+            <h2 id="partsModalTitle">Ersatzteil wählen</h2>
+            <p id="partsModalSubtitle"></p>
+          </div>
+          <button id="closePartsModalBtn" class="ids-button tertiary" type="button" aria-label="Schließen">Schließen</button>
+        </header>
+        <section class="modal-body">
+          <form id="partsSearchForm" class="parts-search-form">
+            <label>
+              <span>Typ</span>
+              <input id="partsFilterType" list="partsTypeOptions" type="text" placeholder="Alle" autocomplete="off" />
+              <datalist id="partsTypeOptions"></datalist>
+            </label>
+            <label>
+              <span>Artikelnummer</span>
+              <input id="partsFilterItem" list="partsItemOptions" type="text" placeholder="Alle" autocomplete="off" />
+              <datalist id="partsItemOptions"></datalist>
+            </label>
+            <label>
+              <span>Seriennummer</span>
+              <input id="partsFilterSerial" list="partsSerialOptions" type="text" placeholder="Alle" autocomplete="off" />
+              <datalist id="partsSerialOptions"></datalist>
+            </label>
+            <label>
+              <span>Standort</span>
+              <input id="partsFilterFacility" list="partsFacilityOptions" type="text" placeholder="Alle" autocomplete="off" />
+              <datalist id="partsFacilityOptions"></datalist>
+            </label>
+            <label>
+              <span>Lagerort</span>
+              <input id="partsFilterBin" list="partsBinOptions" type="text" placeholder="Alle" autocomplete="off" />
+              <datalist id="partsBinOptions"></datalist>
+            </label>
+            <button class="ids-button tertiary parts-clear-btn" type="button" id="partsClearFiltersBtn" aria-label="Filter löschen">X</button>
+          </form>
+          <div class="parts-results">
+            <div class="parts-table-wrapper">
+              <table class="ids-data-table">
+                <thead>
+                  <tr>
+                    <th>Typ</th>
+                    <th>Artikelnummer</th>
+                    <th>Seriennummer</th>
+                    <th>Standort</th>
+                    <th>Lagerort</th>
+                    <th>Auswahl</th>
+                  </tr>
+                </thead>
+                <tbody id="partsResultsBody"></tbody>
+              </table>
+            </div>
+            <div class="parts-pagination">
+              <button id="partsPrevPage" class="ids-button tertiary" type="button">&lsaquo; Zurück</button>
+              <span id="partsPaginationInfo">Seite 1</span>
+              <button id="partsNextPage" class="ids-button tertiary" type="button">Weiter &rsaquo;</button>
+            </div>
+          </div>
+        </section>
+        <div class="modal-resize-handle" id="partsResizeHandle"></div>
+      </div>
+    </div>
+    <script src="./api-config.js?v=2"></script>
+    <script src="./app.js?v=47" type="module"></script>
+  </body>
+</html>

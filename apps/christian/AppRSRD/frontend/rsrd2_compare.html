@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RSRD2 Vergleich</title>
+    <link rel="stylesheet" href="./ids-enterprise.css?v=2" />
+    <link rel="stylesheet" href="./styles.css?v=45" />
+  </head>
+  <body class="rsrd2-compare-page">
+    <header class="m3-header">
+      <div class="header-left">
+        <div>
+          <div class="app-title">MFD Automation</div>
+          <div class="app-subtitle">RSRD2 &middot; Vergleich</div>
+        </div>
+      </div>
+      <div class="env-switch-group" id="envSwitchGroup">
+        <div class="env-switch-block">
+          <span class="env-switch-title">ERP</span>
+          <div class="env-switch" id="envSwitch" data-env="live">
+            <span class="env-label env-label--test">TEST</span>
+            <button id="envToggle" class="env-toggle" type="button" aria-label="ERP Umgebung wechseln">
+              <span class="env-toggle-handle"></span>
+            </button>
+            <span class="env-label env-label--live">LIVE</span>
+          </div>
+        </div>
+        <div class="env-switch-block">
+          <span class="env-switch-title">RSRD</span>
+          <div class="env-switch" id="rsrdEnvSwitch" data-env="live">
+            <span class="env-label env-label--test">TEST</span>
+            <button id="rsrdEnvToggle" class="env-toggle" type="button" aria-label="RSRD Umgebung wechseln">
+              <span class="env-toggle-handle"></span>
+            </button>
+            <span class="env-label env-label--live">LIVE</span>
+          </div>
+        </div>
+      </div>
+    </header>
+    <main>
+      <section class="card rsrd2-compare-card">
+        <div class="rsrd2-compare-header">
+          <div>
+            <h2 id="compareTitle">Vergleich</h2>
+            <p id="compareSubtitle">ERP vs. RSRD2</p>
+          </div>
+          <div class="rsrd2-compare-actions">
+            <button class="ids-button rsrd2-back-btn" id="rsrd2BackBtn" type="button">&lsaquo; Zurück</button>
+            <button class="ids-button rsrd2-xml-btn" id="rsrd2XmlBtn" type="button">XML anzeigen</button>
+          </div>
+        </div>
+        <div id="compareStatus" class="rsrd2-status">Lade Vergleich ...</div>
+        <div class="table-wrapper">
+          <table class="ids-data-table rsrd2-compare-table">
+            <thead>
+              <tr>
+                <th>Feld</th>
+                <th>ERP</th>
+                <th>RSRD2</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="compareTableBody"></tbody>
+          </table>
+        </div>
+        <div class="rsrd2-documents" id="rsrd2Documents">
+          <div class="rsrd2-documents-header">
+            <h3>Dokumente</h3>
+            <span id="rsrd2DocumentsCount"></span>
+          </div>
+          <div id="rsrd2DocumentsBody" class="rsrd2-documents-body">Lade Dokumente ...</div>
+        </div>
+      </section>
+    </main>
+    <script src="./api-config.js?v=2"></script>
+    <script src="./rsrd2_compare.js?v=14"></script>
+  </body>
+</html>

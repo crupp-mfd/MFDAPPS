@@ -1,0 +1,9 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "app-rsrd"
+version = "0.1.0"
+description = "MFDApps RSRD API"
+requires-python = ">=3.11"

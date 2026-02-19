@@ -150,3 +150,18 @@ Standard ohne Argument ist `restart`, also:
 ```bash
 ./scripts/server.sh
 ```
+
+## Credentials Und Runtime (Nur Unter DEV)
+
+Verbindliche lokale Pfade:
+
+- `/Users/crupp/dev/MFDAPPS/credentials`
+- `/Users/crupp/dev/MFDAPPS/data`
+
+Alle fuer AppTeilenummer benoetigten Dateien (IONAPI/JDBC/TST) muessen unter
+`/Users/crupp/dev/MFDAPPS/credentials` liegen. Es wird kein externer
+Credentials-Pfad ausserhalb von `DEV` vorausgesetzt.
+
+Details und erwartete Struktur:
+
+- `/Users/crupp/dev/MFDAPPS/credentials/README.md`

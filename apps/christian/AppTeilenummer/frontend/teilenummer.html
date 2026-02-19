@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MFD Automation</title>
+    <link rel="stylesheet" href="ids-enterprise.css?v=1" />
+    <link rel="stylesheet" href="styles.css?v=44" />
+  </head>
+  <body data-default-module="teilenummer">
+    <div id="loaderOverlay" class="loader-overlay hidden">
+      <section class="card loader-card" id="loaderPanel">
+        <h1>MFD Rail</h1>
+        <p class="subtitle" id="loaderSubtitle">Teilenummer ändern</p>
+        <div class="status-line" id="statusText">VERBINDE ...</div>
+        <div class="loader-random-image hidden" id="loaderRandomImageWrap">
+          <img id="loaderRandomImage" alt="Statusbild" />
+        </div>
+        <div class="loader-steps hidden" id="loaderSteps">
+          <div class="loader-steps-title">Ablauf</div>
+          <div class="loader-steps-content">
+            <ol class="loader-steps-list" id="loaderStepsList"></ol>
+            <div class="loader-steps-image hidden" id="loaderStepImageWrap">
+              <img id="loaderStepImage" alt="Schrittbild" />
+            </div>
+          </div>
+        </div>
+        <div class="loader-io hidden" id="loaderIo">
+          <div class="loader-io-row">
+            <span class="loader-io-label">Quelle</span>
+            <span class="loader-io-value" id="loaderSource">-</span>
+          </div>
+          <div class="loader-io-row">
+            <span class="loader-io-label">Ziel</span>
+            <span class="loader-io-value" id="loaderTarget">-</span>
+          </div>
+        </div>
+        <div class="progress-wrapper">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <div class="progress-detail" id="progressDetail">0&nbsp;/&nbsp;0</div>
+      </section>
+    </div>
+    <header class="m3-header">
+      <div class="header-left">
+        <div class="menu-wrapper">
+          <button class="menu-btn" id="mainMenuBtn" aria-label="Menü">
+            <span></span><span></span><span></span>
+          </button>
+          <div class="menu-dropdown hidden" id="mainMenu">
+            <button type="button" class="menu-item" data-page="/objektstrukturtausch.html?module=sparepart">
+              1. Objektstrukturtausch
+            </button>
+            <button type="button" class="menu-item" data-page="/objektstrukturtausch.html?module=rsrd2">
+              2. RSRD2 Sync
+            </button>
+            <button type="button" class="menu-item" data-page="/wagenumbau.html">3. Bremsenumbau</button>
+            <button type="button" class="menu-item menu-item--active" data-module="teilenummer">
+              4. Teilenummer ändern
+            </button>
+          </div>
+        </div>
+        <div>
+          <div class="app-title" id="moduleTitle">MFD Automation</div>
+          <div class="app-subtitle" id="moduleSubtitle">MFDApps &middot; Teilenummer ändern</div>
+        </div>
+      </div>
+      <div class="env-switch" id="envSwitch" data-env="live">
+        <span class="env-label env-label--test">TEST</span>
+        <button id="envToggle" class="env-toggle" type="button" aria-label="Umgebung wechseln">
+          <span class="env-toggle-handle"></span>
+        </button>
+        <span class="env-label env-label--live">LIVE</span>
+      </div>
+      <div class="header-right" id="headerSearch">
+        <input class="search-field" id="fulltextSearch" type="text" placeholder="Volltextsuche ..." />
+      </div>
+    </header>
+    <main>
+      <div id="sparepartModule">
+        <div class="layout" id="wagonsView">
+          <section class="card filter-card" id="filterPanel">
+            <div class="filter-grid">
+              <div class="filter-field filter-field--stat">
+                <label class="filter-label" for="aStatFilter">STAT</label>
+                <div class="combo">
+                  <input id="aStatFilter" list="aStatOptions" type="text" placeholder="STAT" autocomplete="off" />
+                </div>
+                <datalist id="aStatOptions"></datalist>
+              </div>
+              <div class="filter-field filter-field--itno">
+                <label class="filter-label" for="aItnoFilter">ITNO</label>
+                <div class="combo">
+                  <input id="aItnoFilter" list="aItnoOptions" type="text" placeholder="ITNO" autocomplete="off" />
+                </div>
+                <datalist id="aItnoOptions"></datalist>
+              </div>
+              <div class="filter-field filter-field--sern">
+                <label class="filter-label" for="aSernFilter">SERN</label>
+                <div class="combo">
+                  <input id="aSernFilter" list="aSernOptions" type="text" placeholder="SERN" autocomplete="off" />
+                </div>
+                <datalist id="aSernOptions"></datalist>
+              </div>
+              <div class="filter-field filter-field--alii">
+                <label class="filter-label" for="aAliiFilter">ALII</label>
+                <div class="combo">
+                  <input id="aAliiFilter" list="aAliiOptions" type="text" placeholder="ALII" autocomplete="off" />
+                </div>
+                <datalist id="aAliiOptions"></datalist>
+              </div>
+              <div class="filter-field filter-field--eqtp">
+                <label class="filter-label" for="aEqtpFilter">EQTP</label>
+                <div class="combo">
+                  <input id="aEqtpFilter" list="aEqtpOptions" type="text" placeholder="EQTP" autocomplete="off" />
+                </div>
+                <datalist id="aEqtpOptions"></datalist>
+              </div>
+              <div class="filter-field filter-field--whlo">
+                <label class="filter-label" for="bWhloFilter">WHLO</label>
+                <div class="combo">
+                  <input id="bWhloFilter" list="bWhloOptions" type="text" placeholder="WHLO" autocomplete="off" />
+                </div>
+                <datalist id="bWhloOptions"></datalist>
+              </div>
+              <div class="filter-field filter-field--whsl">
+                <label class="filter-label" for="bWhslFilter">WHSL</label>
+                <div class="combo">
+                  <input id="bWhslFilter" list="bWhslOptions" type="text" placeholder="WHSL" autocomplete="off" />
+                </div>
+                <datalist id="bWhslOptions"></datalist>
+              </div>
+              <div class="filter-field filter-field--faci">
+                <label class="filter-label" for="bFaciFilter">FACI</label>
+                <div class="combo">
+                  <input id="bFaciFilter" list="bFaciOptions" type="text" placeholder="FACI" autocomplete="off" />
+                </div>
+                <datalist id="bFaciOptions"></datalist>
+              </div>
+              <div class="filter-field filter-field--hitn">
+                <label class="filter-label" for="cMtrlFilter">HITN</label>
+                <div class="combo">
+                  <input id="cMtrlFilter" list="cMtrlOptions" type="text" placeholder="HITN" autocomplete="off" />
+                </div>
+                <datalist id="cMtrlOptions"></datalist>
+              </div>
+              <div class="filter-field filter-field--hser">
+                <label class="filter-label" for="cSernFilter">HSER</label>
+                <div class="combo">
+                  <input id="cSernFilter" list="cSernOptions" type="text" placeholder="HSER" autocomplete="off" />
+                </div>
+                <datalist id="cSernOptions"></datalist>
+              </div>
+              <div class="filter-field filter-field--witno">
+                <label class="filter-label" for="wItnoFilter">W_ITNO</label>
+                <div class="combo">
+                  <input id="wItnoFilter" list="wItnoOptions" type="text" placeholder="W_ITNO" autocomplete="off" />
+                </div>
+                <datalist id="wItnoOptions"></datalist>
+              </div>
+              <div class="filter-field filter-field--wsern">
+                <label class="filter-label" for="wSernFilter">W_SERN</label>
+                <div class="combo">
+                  <input id="wSernFilter" list="wSernOptions" type="text" placeholder="W_SERN" autocomplete="off" />
+                </div>
+                <datalist id="wSernOptions"></datalist>
+              </div>
+              <div class="filter-field filter-field--newitno filter-inline">
+                <label class="filter-label" for="newItnoInput">Neue ITNO</label>
+                <div class="combo">
+                  <input id="newItnoInput" type="text" placeholder="Neue ITNO" autocomplete="off" />
+                </div>
+              </div>
+              <div class="filter-field filter-field--newsern filter-inline">
+                <label class="filter-label" for="newSernInput">Neue SERN</label>
+                <div class="combo">
+                  <input id="newSernInput" type="text" placeholder="Neue SERN" autocomplete="off" />
+                </div>
+              </div>
+              <div class="filter-field filter-field--clear">
+                <label class="filter-label">&nbsp;</label>
+                <div class="combo">
+                  <button
+                    id="clearFiltersBtn"
+                    class="filter-clear-btn"
+                    type="button"
+                    title="Alle Filter löschen"
+                    aria-label="Alle Filter löschen"
+                  >
+                    X
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section class="card table-card hidden" id="tablePanel">
+            <header class="table-header">
+              <div class="table-header-summary">
+                <h2>Wagenübersicht</h2>
+                <p id="countInfo"></p>
+                <p id="cacheStatusInfo" class="cache-status-info"></p>
+              </div>
+              <div class="table-actions">
+                <button id="teilenummerGoBtn" class="ids-button go-cta hidden" type="button">GO (0)</button>
+                <button id="openSwapDbFromWagons" class="ids-button swap-cta" type="button">Jetzt tauschen</button>
+                <button id="reloadBtn" class="ids-button reload-primary">Daten aus PRD / TST aktualisieren</button>
+                <div class="page-size-control">
+                  <label class="page-size-label" for="pageSizeSelect">Zeilen</label>
+                  <select id="pageSizeSelect" class="page-size-select" aria-label="Zeilen pro Seite">
+                    <option value="10">10</option>
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                  </select>
+                </div>
+                <div class="pagination">
+                  <button id="prevPage" class="ids-button tertiary" disabled>&lsaquo; Zurück</button>
+                  <span id="paginationInfo">Seite 1</span>
+                  <button id="nextPage" class="ids-button tertiary" disabled>Weiter &rsaquo;</button>
+                </div>
+              </div>
+            </header>
+            <div class="table-wrapper">
+              <table class="ids-data-table">
+                <thead id="tableHead"></thead>
+                <tbody id="tableBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+        <div class="layout hidden" id="objstrkView">
+          <section class="card table-card" id="objstrkCard">
+            <header class="table-header objstrk-header">
+              <div>
+                <h2>Objektstruktur</h2>
+                <p id="objstrkMeta" class="objstrk-meta"></p>
+                <button id="backToWagonsBtn" class="ids-button tertiary objstrk-back-btn" type="button">
+                  Zurück zur Übersicht
+                </button>
+              </div>
+              <div class="objstrk-controls">
+                <div class="objstrk-actions">
+                  <button id="openSwapDbFromObj" class="link-button" type="button">Zur Tauschdatenbank</button>
+                  <button id="collapseAllBtn" class="ids-button tertiary" type="button">Alles einklappen</button>
+                  <button id="expandAllBtn" class="ids-button tertiary" type="button">Alles ausklappen</button>
+                </div>
+              </div>
+            </header>
+            <div class="table-wrapper">
+              <table class="ids-data-table">
+                <thead id="objstrkHead"></thead>
+                <tbody id="objstrkBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+        <div class="layout hidden" id="swapView">
+          <section class="card table-card" id="swapCard">
+            <header class="table-header">
+              <div>
+                <h2>Tausch-Datenbank</h2>
+                <p id="swapCountInfo" class="objstrk-meta"></p>
+              </div>
+              <div class="table-actions">
+                <button id="swapBackBtn" class="ids-button tertiary" type="button">Zurück zur Übersicht</button>
+                <button id="swapSelectAllBtn" class="ids-button tertiary" type="button">Alles markieren</button>
+                <button id="swapClearSelectionBtn" class="ids-button tertiary" type="button">Nichts markieren</button>
+                <button id="swapExecuteBtn" class="ids-button primary reload-button" type="button">TAUSCH DURCHFÜHREN</button>
+              </div>
+            </header>
+            <div class="table-wrapper">
+              <table class="ids-data-table">
+                <thead>
+                  <tr>
+                    <th>Baureihe</th>
+                    <th>Wagen-SerNr</th>
+                    <th>Original TeileNr</th>
+                    <th>Original SerNr</th>
+                    <th>Neu-ArtNr</th>
+                    <th>Neu-SerNr</th>
+                    <th>User</th>
+                    <th>Zeitstempel</th>
+                    <th>Tausch</th>
+                    <th>Löschen</th>
+                  </tr>
+                </thead>
+                <tbody id="swapTableBody"></tbody>
+              </table>
+            </div>
+            <div class="table-actions swap-pagination">
+              <div class="pagination">
+                <button id="swapPrevPage" class="ids-button tertiary" type="button">&lsaquo; Zurück</button>
+                <span id="swapPaginationInfo">Seite 1</span>
+                <button id="swapNextPage" class="ids-button tertiary" type="button">Weiter &rsaquo;</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+      <div id="rsrd2Module" class="layout hidden">
+        <section class="card">
+          <div class="rsrd2-header">
+            <div>
+              <h2>RSRD2 Sync</h2>
+              <p class="rsrd2-subtitle">Rolling Stock Reference Data</p>
+            </div>
+            <div class="rsrd2-actions">
+              <button id="rsrd2LoadErpBtn" class="ids-button tertiary" type="button">Wagennummern aus ERP laden</button>
+              <button id="rsrd2LoadErpFullBtn" class="ids-button tertiary" type="button">Wagenattribute aus ERP laden</button>
+              <button id="rsrd2FetchJsonBtn" class="ids-button tertiary" type="button">JSON aus RSRD laden</button>
+              <button id="rsrd2ProcessJsonBtn" class="ids-button primary" type="button">JSON verarbeiten</button>
+              <button id="rsrd2CompareBtn" class="ids-button tertiary" type="button">Prüfung</button>
+            </div>
+          </div>
+          <p id="rsrd2Status" class="rsrd2-status">Noch keine Wagennummern geladen.</p>
+          <div id="rsrd2Log" class="rsrd2-log rsrd2-log-empty" aria-live="polite"></div>
+        </section>
+      </div>
+    </main>
+    <div id="partsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="partsModalTitle">
+      <div class="modal-inner">
+        <header class="modal-header">
+          <div>
+            <h2 id="partsModalTitle">Ersatzteil wählen</h2>
+            <p id="partsModalSubtitle"></p>
+          </div>
+          <button id="closePartsModalBtn" class="ids-button tertiary" type="button" aria-label="Schließen">Schließen</button>
+        </header>
+        <section class="modal-body">
+          <form id="partsSearchForm" class="parts-search-form">
+            <label>
+              <span>Typ</span>
+              <input id="partsFilterType" list="partsTypeOptions" type="text" placeholder="Alle" autocomplete="off" />
+              <datalist id="partsTypeOptions"></datalist>
+            </label>
+            <label>
+              <span>Artikelnummer</span>
+              <input id="partsFilterItem" list="partsItemOptions" type="text" placeholder="Alle" autocomplete="off" />
+              <datalist id="partsItemOptions"></datalist>
+            </label>
+            <label>
+              <span>Seriennummer</span>
+              <input id="partsFilterSerial" list="partsSerialOptions" type="text" placeholder="Alle" autocomplete="off" />
+              <datalist id="partsSerialOptions"></datalist>
+            </label>
+            <label>
+              <span>Standort</span>
+              <input id="partsFilterFacility" list="partsFacilityOptions" type="text" placeholder="Alle" autocomplete="off" />
+              <datalist id="partsFacilityOptions"></datalist>
+            </label>
+            <label>
+              <span>Lagerort</span>
+              <input id="partsFilterBin" list="partsBinOptions" type="text" placeholder="Alle" autocomplete="off" />
+              <datalist id="partsBinOptions"></datalist>
+            </label>
+            <button class="ids-button tertiary parts-clear-btn" type="button" id="partsClearFiltersBtn" aria-label="Filter löschen">X</button>
+          </form>
+          <div class="parts-results">
+            <div class="parts-table-wrapper">
+              <table class="ids-data-table">
+                <thead>
+                  <tr>
+                    <th>Typ</th>
+                    <th>Artikelnummer</th>
+                    <th>Seriennummer</th>
+                    <th>Standort</th>
+                    <th>Lagerort</th>
+                    <th>Auswahl</th>
+                  </tr>
+                </thead>
+                <tbody id="partsResultsBody"></tbody>
+              </table>
+            </div>
+            <div class="parts-pagination">
+              <button id="partsPrevPage" class="ids-button tertiary" type="button">&lsaquo; Zurück</button>
+              <span id="partsPaginationInfo">Seite 1</span>
+              <button id="partsNextPage" class="ids-button tertiary" type="button">Weiter &rsaquo;</button>
+            </div>
+          </div>
+        </section>
+        <div class="modal-resize-handle" id="partsResizeHandle"></div>
+      </div>
+    </div>
+    <script src="api-config.js?v=1"></script>
+    <script src="app.js?v=46" type="module"></script>
+  </body>
+</html>

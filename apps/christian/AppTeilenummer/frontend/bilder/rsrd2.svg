@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="240" viewBox="0 0 480 240" role="img" aria-label="RSRD2 Logo">
+  <defs>
+    <linearGradient id="g" x1="60" y1="40" x2="420" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#003399"/>
+      <stop offset="0.55" stop-color="#1E6BFF"/>
+      <stop offset="1" stop-color="#00C2FF"/>
+    </linearGradient>
+
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#06122A" flood-opacity="0.22"/>
+    </filter>
+
+    <text id="wm"
+          x="240" y="154"
+          text-anchor="middle"
+          font-family="Inter, Montserrat, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+          font-size="124"
+          font-weight="900"
+          letter-spacing="4">
+      RSRD2
+    </text>
+
+    <clipPath id="clip">
+      <use href="#wm"/>
+    </clipPath>
+
+    <linearGradient id="lineG" x1="0" y1="0" x2="480" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <g filter="url(#shadow)" clip-path="url(#clip)">
+    <rect x="0" y="0" width="480" height="240" fill="url(#g)"/>
+
+    <g stroke="url(#lineG)" stroke-width="6" stroke-linecap="round" opacity="0.9">
+      <path d="M-40 78  L520 78"/>
+      <path d="M-40 110 L520 110"/>
+      <path d="M-40 142 L520 142"/>
+    </g>
+
+    <g stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="10" stroke-linecap="round">
+      <path d="M40 200 L210 30"/>
+      <path d="M110 210 L280 40"/>
+      <path d="M180 220 L350 50"/>
+    </g>
+  </g>
+
+  <use href="#wm" fill="none" stroke="#06122A" stroke-opacity="0.55" stroke-width="4"/>
+
+  <g clip-path="url(#clip)" opacity="0.55">
+    <path d="M345 78 C370 58, 405 58, 425 76" fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"/>
+  </g>
+</svg>

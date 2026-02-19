@@ -118,8 +118,23 @@
           <button id="refreshBtn" type="button">Dateien aktualisieren</button>
           <button id="createBtn" type="button">Abrechnung erstellen</button>
           <button id="createSpecialBtn" type="button">Spezial: Grampet/Railcare/Raildox</button>
+          <button id="fabricImportBtn" type="button">Fabric-Daten importieren</button>
         </div>
         <div id="status" class="status"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Fabric Datenstand</h2>
+        <div class="grid">
+          <div>
+            <div class="title">Aktueller Stand (gewähltes Jahr)</div>
+            <div id="fabricStatusText" class="file-name missing">Noch kein Import</div>
+          </div>
+          <div>
+            <div class="title">SQLite Datenbank</div>
+            <div id="fabricDbPath" class="file-name missing">Nicht vorhanden</div>
+          </div>
+        </div>
       </section>
 
       <section class="panel">
@@ -182,6 +197,7 @@
         const refreshBtn = document.getElementById("refreshBtn");
         const createBtn = document.getElementById("createBtn");
         const createSpecialBtn = document.getElementById("createSpecialBtn");
+        const fabricImportBtn = document.getElementById("fabricImportBtn");
         const statusEl = document.getElementById("status");
 
         const sourceOverviewName = document.getElementById("sourceOverviewName");
@@ -196,6 +212,8 @@
         const specialOutDetailsName = document.getElementById("specialOutDetailsName");
         const specialOutOverviewLink = document.getElementById("specialOutOverviewLink");
         const specialOutDetailsLink = document.getElementById("specialOutDetailsLink");
+        const fabricStatusText = document.getElementById("fabricStatusText");
+        const fabricDbPath = document.getElementById("fabricDbPath");
 
         const DEFAULT_YEAR = 2025;
         yearInput.value = String(DEFAULT_YEAR);
@@ -237,6 +255,77 @@
           );
         };
 
+        const renderFabricStatus = (payload) => {
+          if (payload && payload.exists) {
+            fabricStatusText.textContent = `Jahr ${payload.year}: ${payload.row_count} Zeilen, Stand ${payload.refreshed_at || "-"}`;
+            fabricStatusText.classList.remove("missing");
+            fabricDbPath.textContent = payload.sqlite_path || "-";
+            fabricDbPath.classList.remove("missing");
+          } else {
+            fabricStatusText.textContent = "Noch kein Import";
+            fabricStatusText.classList.add("missing");
+            fabricDbPath.textContent = (payload && payload.sqlite_path) ? payload.sqlite_path : "Nicht vorhanden";
+            fabricDbPath.classList.toggle("missing", !payload || !payload.sqlite_path);
+          }
+        };
+
+        const addDerivedSpecialOutputs = async (payload, year) => {
+          const hasSpecialOverview =
+            payload.special_outputs &&
+            payload.special_outputs.overview &&
+            payload.special_outputs.overview.exists;
+          const hasSpecialDetails =
+            payload.special_outputs &&
+            payload.special_outputs.details &&
+            payload.special_outputs.details.exists;
+          if (hasSpecialOverview && hasSpecialDetails) return;
+
+          const browserUrl =
+            payload.paths &&
+            payload.paths.output_dir &&
+            payload.paths.output_dir.browser_url;
+          if (!browserUrl) return;
+
+          try {
+            const resp = await fetch(api(browserUrl));
+            const html = await resp.text();
+            if (!resp.ok || !html) return;
+
+            const hrefs = Array.from(
+              html.matchAll(/href=\"([^\"]+special_[^\"]+\.xlsx)\"/g),
+              (m) => decodeURIComponent(String(m[1]).replace(/^\.?\//, ""))
+            );
+            const findLatest = (prefix) => {
+              const yearMatches = hrefs.filter((n) => n.startsWith(prefix) && n.includes(`_${year}_`));
+              const candidates = yearMatches.length ? yearMatches : hrefs.filter((n) => n.startsWith(prefix));
+              if (!candidates.length) return null;
+              return [...candidates].sort().reverse()[0];
+            };
+
+            const overviewName = findLatest("special_vertragsuebersicht_");
+            const detailsName = findLatest("special_einzelabrechnungen_detail_");
+            if (!overviewName && !detailsName) return;
+
+            payload.special_outputs = payload.special_outputs || {};
+            if (overviewName) {
+              payload.special_outputs.overview = {
+                exists: true,
+                name: overviewName,
+                download_url: `/api/mehrkilometer/download?kind=special_output_overview&name=${encodeURIComponent(overviewName)}`,
+              };
+            }
+            if (detailsName) {
+              payload.special_outputs.details = {
+                exists: true,
+                name: detailsName,
+                download_url: `/api/mehrkilometer/download?kind=special_output_details&name=${encodeURIComponent(detailsName)}`,
+              };
+            }
+          } catch (_) {
+            // keep original payload when fallback lookup fails
+          }
+        };
+
         const currentYear = () => {
           const parsed = Number.parseInt(yearInput.value, 10);
           if (!Number.isFinite(parsed)) return DEFAULT_YEAR;
@@ -247,9 +336,14 @@
           const year = currentYear();
           yearInput.value = String(year);
           try {
-            const resp = await fetch(api(`/api/mehrkilometer/sources?year=${encodeURIComponent(year)}`));
-            const payload = await resp.json().catch(() => ({}));
-            if (!resp.ok) throw new Error(payload.detail || "Dateien konnten nicht geladen werden.");
+            const [sourcesResp, fabricStatusResp] = await Promise.all([
+              fetch(api(`/api/mehrkilometer/sources?year=${encodeURIComponent(year)}`)),
+              fetch(api(`/api/mehrkilometer/fabric/status?year=${encodeURIComponent(year)}`)),
+            ]);
+            const payload = await sourcesResp.json().catch(() => ({}));
+            const fabricPayload = await fabricStatusResp.json().catch(() => ({}));
+            if (!sourcesResp.ok) throw new Error(payload.detail || "Dateien konnten nicht geladen werden.");
+            if (!fabricStatusResp.ok) throw new Error(fabricPayload.detail || "Fabric-Status konnte nicht geladen werden.");
 
             if (!yearInitialized) {
               const recommended = Number.parseInt(payload.recommended_year, 10);
@@ -260,9 +354,11 @@
               }
             }
 
+            await addDerivedSpecialOutputs(payload, year);
             renderFile(sourceOverviewName, sourceOverviewLink, payload.sources && payload.sources.overview, "Nicht gefunden");
             renderFile(sourceKmName, sourceKmLink, payload.sources && payload.sources.kilometer, "Nicht gefunden");
             renderOutputs(payload);
+            renderFabricStatus(fabricPayload);
             if (payload.warning) {
               setStatus(payload.warning, "warn");
             } else {
@@ -278,6 +374,7 @@
           yearInput.value = String(year);
           createBtn.disabled = true;
           createSpecialBtn.disabled = true;
+          fabricImportBtn.disabled = true;
           setStatus("Abrechnung läuft ...", "");
           try {
             const resp = await fetch(api(`/api/mehrkilometer/create?year=${encodeURIComponent(year)}`), {
@@ -285,6 +382,7 @@
             });
             const payload = await resp.json().catch(() => ({}));
             if (!resp.ok) throw new Error(payload.detail || "Abrechnung fehlgeschlagen.");
+            await addDerivedSpecialOutputs(payload, year);
             renderOutputs(payload);
             if (payload.warning) {
               setStatus(`Abrechnung erstellt. ${payload.warning}`, "warn");
@@ -296,6 +394,7 @@
           } finally {
             createBtn.disabled = false;
             createSpecialBtn.disabled = false;
+            fabricImportBtn.disabled = false;
           }
         };
 
@@ -304,6 +403,7 @@
           yearInput.value = String(year);
           createBtn.disabled = true;
           createSpecialBtn.disabled = true;
+          fabricImportBtn.disabled = true;
           setStatus("Spezialabrechnung läuft ...", "");
           try {
             const resp = await fetch(api(`/api/mehrkilometer/create-special?year=${encodeURIComponent(year)}`), {
@@ -311,6 +411,7 @@
             });
             const payload = await resp.json().catch(() => ({}));
             if (!resp.ok) throw new Error(payload.detail || "Spezialabrechnung fehlgeschlagen.");
+            await addDerivedSpecialOutputs(payload, year);
             renderOutputs(payload);
             setStatus(
               payload.warning || "Spezialabrechnung erfolgreich erstellt.",
@@ -321,13 +422,45 @@
           } finally {
             createBtn.disabled = false;
             createSpecialBtn.disabled = false;
+            fabricImportBtn.disabled = false;
+          }
+        };
+
+        const importFabricData = async () => {
+          const year = currentYear();
+          yearInput.value = String(year);
+          createBtn.disabled = true;
+          createSpecialBtn.disabled = true;
+          fabricImportBtn.disabled = true;
+          setStatus("Fabric-Import läuft ...", "");
+          try {
+            const resp = await fetch(api(`/api/mehrkilometer/fabric/import?year=${encodeURIComponent(year)}`), {
+              method: "POST",
+            });
+            const payload = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(payload.detail || "Fabric-Import fehlgeschlagen.");
+            renderFabricStatus({
+              exists: true,
+              year: payload.year,
+              row_count: payload.row_count,
+              refreshed_at: payload.refreshed_at,
+              sqlite_path: payload.sqlite_path,
+            });
+            setStatus(`Fabric-Import erfolgreich: ${payload.row_count} Zeilen für ${payload.year}.`, "ok");
+          } catch (err) {
+            setStatus(err.message || "Fabric-Import fehlgeschlagen.", "err");
+          } finally {
+            createBtn.disabled = false;
+            createSpecialBtn.disabled = false;
+            fabricImportBtn.disabled = false;
           }
         };
 
         refreshBtn.addEventListener("click", refresh);
         createBtn.addEventListener("click", createSettlement);
         createSpecialBtn.addEventListener("click", createSpecialSettlement);
-        refresh();
+        fabricImportBtn.addEventListener("click", importFabricData);
+        setStatus("Bereit. Daten werden erst nach Klick auf 'Dateien aktualisieren' geladen.", "ok");
       })();
     </script>
   </body>
