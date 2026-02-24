@@ -187,11 +187,96 @@ body {
 
 body[data-default-module="rsrd2"] .m3-header {
   position: relative;
+  max-width: 1300px;
+  margin: 0 auto;
+  background: #f7f9fd;
+  color: #1f3554;
+  border: 1px solid #d5dfeb;
+  box-shadow: 0 8px 20px rgba(17, 35, 64, 0.08);
 }
 
 body[data-default-module="rsrd2"] .m3-header .env-switch-group {
   margin-left: auto;
   margin-right: auto;
+  gap: 0.75rem;
+}
+
+body[data-default-module="rsrd2"] .m3-header .env-switch-block {
+  gap: 0.2rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 8px;
+  background: #eef3fa;
+}
+
+body[data-default-module="rsrd2"] .m3-header .env-switch-title {
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  color: #53657f;
+}
+
+body[data-default-module="rsrd2"] .m3-header .env-switch {
+  gap: 0.35rem;
+}
+
+body[data-default-module="rsrd2"] .m3-header .env-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #5f6f86;
+  opacity: 1;
+}
+
+body[data-default-module="rsrd2"] .m3-header .env-switch[data-env="test"] .env-label--test,
+body[data-default-module="rsrd2"] .m3-header .env-switch[data-env="live"] .env-label--live {
+  color: #1f3554;
+}
+
+body[data-default-module="rsrd2"] .m3-header .env-toggle {
+  width: 44px;
+  height: 24px;
+  border: 1px solid #b8c5d9;
+  background: #6c757d;
+}
+
+body[data-default-module="rsrd2"] .m3-header .env-toggle-handle {
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: #fff;
+}
+
+body[data-default-module="rsrd2"] .m3-header .env-switch[data-env="live"] .env-toggle {
+  background: #0d6efd;
+}
+
+body[data-default-module="rsrd2"] .m3-header .env-switch[data-env="live"] .env-toggle-handle {
+  transform: translateX(20px);
+}
+
+body[data-default-module="rsrd2"] .m3-header .env-switch[data-env="test"] .env-toggle {
+  background: #6c757d;
+}
+
+body[data-default-module="rsrd2"] .menu-btn {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.35rem;
+  height: 2.35rem;
+  padding: 0 0.7rem;
+  border: 1px solid #c5d2e6;
+  border-radius: 0.6rem;
+  background: #fff;
+  color: #1f3554;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+body[data-default-module="rsrd2"] .menu-btn span {
+  display: none;
 }
 
 body[data-default-module="rsrd2"] .rsrd2-actions .ids-button {
@@ -1866,34 +1951,35 @@ body[data-default-module="teilenummer"] .mark-checkbox {
 
 .rsrd2-filters {
   display: grid;
-  grid-template-columns: repeat(6, 170px);
-  gap: 1rem 2.6rem;
-  align-items: start;
-  justify-content: start;
+  grid-template-columns: repeat(6, minmax(170px, 1fr));
+  gap: 1rem;
+  align-items: end;
+  justify-content: stretch;
 }
 
 .rsrd2-filter-inline {
   display: grid;
   gap: 0.3rem;
   min-width: 0;
-  max-width: none;
+  max-width: 100%;
   grid-column: span 2;
 }
 
 .rsrd2-filter-inline-controls {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) auto auto;
   align-items: center;
   gap: 0.6rem;
   width: 100%;
+  min-width: 0;
 }
 
 .rsrd2-filter-inline-controls select {
-  flex: 1;
-  min-width: 120px;
+  min-width: 0;
 }
 
 .rsrd2-filter-inline-controls .rsrd2-go-btn {
-  margin-left: auto;
+  margin-left: 0;
 }
 
 .rsrd2-clear-btn {
@@ -2089,15 +2175,17 @@ body[data-default-module="teilenummer"] .mark-checkbox {
   font-size: 0.85rem;
   color: #2d3648;
   min-width: 0;
-  max-width: 170px;
+  max-width: none;
+  width: 100%;
 }
 
 .rsrd2-filters input {
   border: 1px solid #c4c8cf;
   border-radius: 8px;
   padding: 0.45rem 0.55rem;
-  font-size: 1.2rem;
+  font-size: 1.1rem;
   width: 100%;
+  min-height: 38px;
 }
 
 .rsrd2-filters select {
@@ -2107,6 +2195,7 @@ body[data-default-module="teilenummer"] .mark-checkbox {
   font-size: 1.1rem;
   width: 100%;
   background: #fff;
+  min-height: 38px;
 }
 
 .rsrd2-filters button {
@@ -2115,16 +2204,24 @@ body[data-default-module="teilenummer"] .mark-checkbox {
   height: 38px;
 }
 
+.rsrd2-filter-inline-controls .ids-button,
+.rsrd2-filter-inline-controls .rsrd2-go-btn {
+  grid-column: auto;
+  justify-self: auto;
+}
+
 .rsrd2-table th:nth-child(5),
 .rsrd2-table th:nth-child(6),
 .rsrd2-table th:nth-child(7),
 .rsrd2-table th:nth-child(8),
 .rsrd2-table th:nth-child(9),
+.rsrd2-table th:nth-child(10),
 .rsrd2-table td:nth-child(5),
 .rsrd2-table td:nth-child(6),
 .rsrd2-table td:nth-child(7),
 .rsrd2-table td:nth-child(8),
-.rsrd2-table td:nth-child(9) {
+.rsrd2-table td:nth-child(9),
+.rsrd2-table td:nth-child(10) {
   text-align: center;
 }
 
@@ -2203,12 +2300,37 @@ body[data-default-module="teilenummer"] .mark-checkbox {
   min-height: 22px;
 }
 
+.rsrd2-doc-list {
+  display: block;
+  text-align: left;
+}
+
+.rsrd2-doc-item {
+  font-size: inherit;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
 .rsrd2-compare-page main {
-  padding: 1.5rem 2rem 3rem;
+  max-width: 1300px;
+  margin: 0 auto;
+  padding: 1.25rem 0 2.5rem;
+}
+
+.rsrd2-compare-page {
+  font-size: 18px;
 }
 
 .rsrd2-compare-card {
   padding: 1.5rem;
+}
+
+.rsrd2-compare-page .rsrd2-compare-table th,
+.rsrd2-compare-page .rsrd2-compare-table td {
+  font-size: 0.9rem;
 }
 
 .rsrd2-compare-header {
@@ -2285,6 +2407,11 @@ body[data-default-module="teilenummer"] .mark-checkbox {
 
 .rsrd2-env-select--n {
   background: #ffffff;
+}
+
+.rsrd2-env-select--j {
+  background: #d9f5dc;
+  border-color: #a8e3b0;
 }
 
 .rsrd2-env-select--t {

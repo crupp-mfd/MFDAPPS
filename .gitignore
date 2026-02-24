@@ -1,6 +1,6 @@
 # OS / Editor
 .DS_Store
-.vscode/
+
 .idea/
 
 # Node
@@ -31,3 +31,5 @@ data/cache.db
 data/*.db
 data/*.log
 apps/christian/AppMehrkilometer/runtime/*.db
+
+.python_packages

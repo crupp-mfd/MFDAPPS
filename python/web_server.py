@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import os
 import time
+import io
+import mimetypes
+import importlib
 from xml.sax.saxutils import escape as xml_escape
 import sqlite3
 import subprocess
@@ -10,13 +13,13 @@ import shutil
 import sys
 import json
 import re
-from urllib.parse import urlsplit, urlunsplit, urlencode
+from urllib.parse import urlsplit, urlunsplit, urlencode, unquote, quote
 from pathlib import Path
 from typing import List, Dict, Any, Mapping, Optional
 import threading
 import uuid
 
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Body, Response, Request
 import logging
@@ -26,7 +29,7 @@ from fastapi.staticfiles import StaticFiles
 import psycopg
 import httpx
 from openai import OpenAI
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 try:
     from sparepart_shared.auth import is_basic_auth_valid
@@ -129,6 +132,7 @@ def _resolve_runtime_path(value: str | None, default_name: str) -> Path:
 
 DB_PATH = _resolve_runtime_path(os.getenv("SQLITE_PATH"), "cache.db")
 API_LOG_PATH = _resolve_runtime_path(os.getenv("API_LOG_PATH"), "API.log")
+DRYRUN_TRACE_PATH = _resolve_runtime_path(os.getenv("DRYRUN_TRACE_PATH"), "dryrun_api_calls.txt")
 
 # Guard against legacy root-level DB path leaking in from older shells.
 if DB_PATH.resolve() == (PROJECT_ROOT / "cache.db").resolve():
@@ -175,13 +179,24 @@ RSRD_ERP_FULL_TABLE = "RSRD_ERP_DATA"
 RSRD_UPLOAD_TABLE = "RSRD_WAGON_UPLOAD"
 RSRD_SYNC_TABLE = "RSRD_SYNC_WAGONS"
 RSRD_SYNC_SELECTION_TABLE = "RSRD_SYNC_SELECTIONS"
+RSRD_DOCUMENTS_TABLE = "RSRD_DOCUMENTS"
+RSRD_DOCUMENT_ASSIGNMENTS_TABLE = "RSRD_DOCUMENT_ASSIGNMENTS"
 TEILENUMMER_TABLE = "TEILENUMMER"
 WAGENSUCHE_TABLE = "WAGENSUCHE"
 TEILENUMMER_TAUSCH_TABLE = "TEILENUMMER_TAUSCH"
 CACHE_STATUS_TABLE = "CACHE_TABLE_STATUS"
+DATALAKE_CACHE_SNAPSHOT_TABLE = "DATALAKE_SYNC_SNAPSHOT"
+DATALAKE_CACHE_TABLES_TABLE = "DATALAKE_SYNC_TABLES"
+DATALAKE_SYNC_SELECTION_TABLE = "DATALAKE_SYNC_SELECTIONS"
 TEILENUMMER_TAUSCH_EXTRA_COLUMNS = [
     "NITNO",
     "NSERN",
+    "OUT_DELAY_MIN",
+    "IN_DELAY_MIN",
+    "PLAN_OUT_DATE",
+    "PLAN_OUT_TIME",
+    "PLAN_IN_DATE",
+    "PLAN_IN_TIME",
     "UMGEBAUT",
     "TIMESTAMP",
     "OUT_STATUS",
@@ -196,6 +211,7 @@ TEILENUMMER_TAUSCH_EXTRA_COLUMNS = [
 ]
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 API_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+DRYRUN_TRACE_PATH.parent.mkdir(parents=True, exist_ok=True)
 DEFAULT_SCHEME = os.getenv("SPAREPART_SCHEME", "datalake")
 DEFAULT_CATALOG = os.getenv("SPAREPART_CATALOG")
 DEFAULT_COLLECTION = os.getenv("SPAREPART_DEFAULT_COLLECTION")
@@ -211,6 +227,10 @@ WAGENSUCHE_SQL_FILES = {
 SPAREPARTS_SQL_FILE = PROJECT_ROOT / "sql" / "spareparts_base.sql"
 RSRD_ERP_SQL_FILE = PROJECT_ROOT / "sql" / "rsrd_erp_full.sql"
 TEILENUMMER_SQL_FILE = PROJECT_ROOT / "sql" / "teilenummer_base.sql"
+TEILENUMMER_SQL_FILES = {
+    "prd": PROJECT_ROOT / "sql" / "teilenummer_base_prd.sql",
+    "tst": PROJECT_ROOT / "sql" / "teilenummer_base_tst.sql",
+}
 DEFAULT_ENV = os.getenv("SPAREPART_ENV", "prd").lower()
 WAGENSUCHE_PG_URL = os.getenv("WAGENSUCHE_PG_URL", "").strip()
 WAGENSUCHE_PG_HOST = os.getenv("WAGENSUCHE_PG_HOST", "").strip()
@@ -239,6 +259,9 @@ ENV_IONAPI = {
     },
 }
 MOS125_DRY_RUN = os.getenv("SPAREPART_MOS125_DRY_RUN", "1").strip().lower() in {"1", "true", "yes", "y"}
+MI_CONO = os.getenv("SPAREPART_M3_CONO", "").strip()
+MI_CONO_PRD = os.getenv("SPAREPART_M3_CONO_PRD", "").strip()
+MI_CONO_TST = os.getenv("SPAREPART_M3_CONO_TST", "881").strip()
 CMS100_RETRY_DELAY_SEC = float(os.getenv("SPAREPART_CMS100_RETRY_DELAY", "3").strip() or "3")
 CMS100_RETRY_MAX = int(os.getenv("SPAREPART_CMS100_RETRY_MAX", "20").strip() or "20")
 WAGON_CMS100_RETRY_DELAY_SEC = float(os.getenv("SPAREPART_WAGON_CMS100_RETRY_DELAY", "5").strip() or "5")
@@ -247,6 +270,10 @@ MOS170_RETRY_DELAY_SEC = float(os.getenv("SPAREPART_MOS170_RETRY_DELAY", "3").st
 MOS170_RETRY_MAX = int(os.getenv("SPAREPART_MOS170_RETRY_MAX", "5").strip() or "5")
 MOS100_RETRY_DELAY_SEC = float(os.getenv("SPAREPART_MOS100_RETRY_DELAY", "3").strip() or "3")
 MOS100_RETRY_MAX = int(os.getenv("SPAREPART_MOS100_RETRY_MAX", "10").strip() or "10")
+MOS180_RETRY_DELAY_SEC = float(os.getenv("SPAREPART_MOS180_RETRY_DELAY", "3").strip() or "3")
+MOS180_RETRY_MAX = int(os.getenv("SPAREPART_MOS180_RETRY_MAX", "10").strip() or "10")
+MOS050_RETRY_DELAY_SEC = float(os.getenv("SPAREPART_MOS050_RETRY_DELAY", "3").strip() or "3")
+MOS050_RETRY_MAX = int(os.getenv("SPAREPART_MOS050_RETRY_MAX", "10").strip() or "10")
 WAGON_MOS100_RETRY_MAX = int(os.getenv("SPAREPART_WAGON_MOS100_RETRY_MAX", "8").strip() or "8")
 WAGON_RENUMBER_SKIP_MOS170 = os.getenv("SPAREPART_WAGON_RENUMBER_SKIP_MOS170", "").strip().lower() in {"1", "true", "yes", "y"}
 WAGON_RENUMBER_FIXED_PLPN = os.getenv("SPAREPART_WAGON_RENUMBER_FIXED_PLPN", "").strip()
@@ -273,6 +300,54 @@ JOB_LOG_LIMIT = 2000
 PROGRESS_LINE = re.compile(r"^\d+/\d+\s+Datensätze gespeichert \.\.\.$")
 _jobs_lock = threading.Lock()
 _jobs: Dict[str, Dict[str, Any]] = {}
+_dryrun_trace_lock = threading.Lock()
+_dryrun_trace_seq = 0
+DATALAKE_SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9_]+$")
+_DATALAKE_TABLE_NAME_PATTERN = re.compile(r"^[A-Za-z]{6}$")
+_DATALAKE_TIMESTAMP_PREFERRED_COLUMNS = (
+    "updated_at",
+    "updatedat",
+    "last_updated_at",
+    "lastupdatedat",
+    "last_update",
+    "lastupdate",
+    "modified_at",
+    "modifiedat",
+    "last_modified_at",
+    "lastmodifiedat",
+    "timestamp",
+    "event_time",
+    "created_at",
+)
+_DATALAKE_TIMESTAMP_TYPE_HINTS = ("timestamp", "datetime", "date", "time")
+_DATALAKE_NIGHTLY_PREPARED_TIME = "00:30"
+_DATALAKE_TIMEOUT_DEFAULT_SECONDS = 60
+_DATALAKE_TIMEOUT_RETRY_SECONDS = 300
+_DATALAKE_TIMEOUT_SUPERHEAVY_SECONDS = 600
+_DATALAKE_TIMEOUT_TIERS = ("normal", "timeout", "superheavy")
+_datalake_tables_lock = threading.Lock()
+
+
+def _new_datalake_state() -> Dict[str, Any]:
+    return {
+        "running": False,
+        "current_table": None,
+        "phase": None,
+        "phase_detail": None,
+        "started_at_utc": None,
+        "finished_at_utc": None,
+        "last_error": None,
+        "total_tables": 0,
+        "completed_tables": 0,
+        "error_tables": 0,
+        "tables": {},
+    }
+
+
+_datalake_tables_state: Dict[str, Dict[str, Any]] = {
+    "prd": _new_datalake_state(),
+    "tst": _new_datalake_state(),
+}
 
 app = FastAPI(title="SPAREPART Loader API")
 
@@ -282,6 +357,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _try_include_excel_import_router() -> None:
+    excel_src = PROJECT_ROOT / "apps" / "christian" / "AppExcelImport" / "src"
+    if not excel_src.exists():
+        return
+    excel_src_text = str(excel_src)
+    if excel_src_text not in sys.path:
+        sys.path.insert(0, excel_src_text)
+    try:
+        from app_excel_import.main import router as excel_import_router  # type: ignore
+    except Exception as exc:  # pragma: no cover - optional integration
+        logging.getLogger("excel-import").warning(
+            "AppExcelImport Router konnte nicht eingebunden werden: %s", exc
+        )
+        return
+    app.include_router(excel_import_router)
+
+
+_try_include_excel_import_router()
 
 BASIC_AUTH_USER = os.getenv("BASIC_AUTH_USER", "").strip()
 BASIC_AUTH_PASS = os.getenv("BASIC_AUTH_PASS", "").strip()
@@ -324,6 +419,17 @@ class AuthStaticFiles(StaticFiles):
 @app.middleware("http")
 async def _auth_middleware(request: Request, call_next):
     path = request.url.path
+    if path == "/":
+        portal_file = PROJECT_ROOT / "index.html"
+        if portal_file.exists():
+            return FileResponse(
+                portal_file,
+                media_type="text/html",
+                headers={
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                    "Pragma": "no-cache",
+                },
+            )
     raw_path = ""
     try:
         raw_path = request.scope.get("raw_path", b"").decode("utf-8", "ignore")
@@ -379,6 +485,7 @@ def _prepare_env_tables() -> None:
         return
     with _connect() as conn:
         _ensure_env_tables(conn)
+        _ensure_datalake_cache_tables(conn)
         _init_goldenview_db(conn)
         conn.commit()
 
@@ -462,11 +569,22 @@ def _normalize_rsrd_env(rsrd_env: str | None, env: str | None) -> str:
 
 
 def _effective_dry_run(env: str | None) -> bool:
+    def _override(name: str) -> bool | None:
+        raw = os.getenv(name)
+        if raw is None or raw.strip() == "":
+            return None
+        return raw.strip().lower() in {"1", "true", "yes", "y"}
+
     normalized = _normalize_env(env)
     if normalized == "prd":
-        override = os.getenv("SPAREPART_PRD_DRY_RUN")
-        if override is not None and override.strip() != "":
-            return override.strip().lower() in {"1", "true", "yes", "y"}
+        override = _override("SPAREPART_PRD_DRY_RUN")
+        if override is not None:
+            return override
+        return MOS125_DRY_RUN
+    if normalized == "tst":
+        override = _override("SPAREPART_TST_DRY_RUN")
+        if override is not None:
+            return override
         return MOS125_DRY_RUN
     return MOS125_DRY_RUN
 
@@ -742,6 +860,143 @@ def _ensure_rsrd_sync_selection_table(conn: sqlite3.Connection, env: str | None)
     return table_name
 
 
+def _rsrd_documents_dir() -> Path:
+    directory = RUNTIME_ROOT / "rsrd_documents"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _ensure_rsrd_document_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {RSRD_DOCUMENTS_TABLE} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            display_name TEXT NOT NULL,
+            original_name TEXT NOT NULL,
+            stored_name TEXT NOT NULL UNIQUE,
+            mime_type TEXT,
+            size_bytes INTEGER,
+            uploaded_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {RSRD_DOCUMENT_ASSIGNMENTS_TABLE} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id INTEGER NOT NULL,
+            assign_type TEXT NOT NULL,
+            assign_value TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(document_id, assign_type, assign_value)
+        )
+        """
+    )
+    conn.execute(
+        f"""
+        CREATE INDEX IF NOT EXISTS idx_rsrd_doc_assign_lookup
+        ON {RSRD_DOCUMENT_ASSIGNMENTS_TABLE}(assign_type, assign_value)
+        """
+    )
+    conn.execute(
+        f"""
+        CREATE INDEX IF NOT EXISTS idx_rsrd_doc_assign_doc
+        ON {RSRD_DOCUMENT_ASSIGNMENTS_TABLE}(document_id)
+        """
+    )
+
+
+def _normalize_doc_assign_values(raw_values: Any) -> List[str]:
+    values = raw_values if isinstance(raw_values, list) else []
+    seen = set()
+    cleaned: List[str] = []
+    for item in values:
+        value = str(item or "").strip()
+        if not value:
+            continue
+        key = value.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(value)
+    return cleaned
+
+
+def _load_matching_documents(
+    conn: sqlite3.Connection,
+    rows: List[sqlite3.Row],
+) -> Dict[str, List[str]]:
+    _ensure_rsrd_document_tables(conn)
+    baureihen = {
+        str(row["baureihe"]).strip().upper()
+        for row in rows
+        if row["baureihe"] is not None and str(row["baureihe"]).strip()
+    }
+    wagen_typen = {
+        str(row["wagen_typ"]).strip().upper()
+        for row in rows
+        if row["wagen_typ"] is not None and str(row["wagen_typ"]).strip()
+    }
+    where: List[str] = []
+    params: List[Any] = []
+    if baureihen:
+        where.append(
+            "(a.assign_type = 'baureihe' AND UPPER(TRIM(a.assign_value)) IN ("
+            + ", ".join("?" for _ in baureihen)
+            + "))"
+        )
+        params.extend(sorted(baureihen))
+    if wagen_typen:
+        where.append(
+            "(a.assign_type = 'wagen_typ' AND UPPER(TRIM(a.assign_value)) IN ("
+            + ", ".join("?" for _ in wagen_typen)
+            + "))"
+        )
+        params.extend(sorted(wagen_typen))
+    if not where:
+        return {}
+
+    matched = conn.execute(
+        f"""
+        SELECT d.display_name, a.assign_type, UPPER(TRIM(a.assign_value)) AS assign_key
+        FROM {RSRD_DOCUMENT_ASSIGNMENTS_TABLE} a
+        JOIN {RSRD_DOCUMENTS_TABLE} d
+          ON d.id = a.document_id
+        WHERE {" OR ".join(where)}
+        ORDER BY d.display_name
+        """,
+        params,
+    ).fetchall()
+
+    by_baureihe: Dict[str, set[str]] = {}
+    by_wagen_typ: Dict[str, set[str]] = {}
+    for row in matched:
+        name = str(row["display_name"] or "").strip()
+        key = str(row["assign_key"] or "").strip()
+        if not name or not key:
+            continue
+        if row["assign_type"] == "baureihe":
+            by_baureihe.setdefault(key, set()).add(name)
+        elif row["assign_type"] == "wagen_typ":
+            by_wagen_typ.setdefault(key, set()).add(name)
+
+    result: Dict[str, List[str]] = {}
+    for row in rows:
+        wagon = str(row["wagon_number"] or "").strip()
+        if not wagon:
+            continue
+        names: set[str] = set()
+        baureihe_key = str(row["baureihe"] or "").strip().upper()
+        wagen_typ_key = str(row["wagen_typ"] or "").strip().upper()
+        if baureihe_key and baureihe_key in by_baureihe:
+            names.update(by_baureihe[baureihe_key])
+        if wagen_typ_key and wagen_typ_key in by_wagen_typ:
+            names.update(by_wagen_typ[wagen_typ_key])
+        result[wagon] = sorted(names)
+    return result
+
+
 def _fetch_erp_wagon_numbers(
     conn: sqlite3.Connection,
     env: str | None,
@@ -956,6 +1211,16 @@ def _wagensuche_sql_file(env: str | None) -> Path:
         return preferred
     fallback = WAGENSUCHE_SQL_FILES.get("prd")
     return preferred or fallback or SQL_FILE
+
+
+def _teilenummer_sql_file(env: str | None) -> Path:
+    normalized = _normalize_env(env)
+    preferred = TEILENUMMER_SQL_FILES.get(normalized)
+    if preferred and preferred.exists():
+        return preferred
+    if TEILENUMMER_SQL_FILE.exists():
+        return TEILENUMMER_SQL_FILE
+    return preferred or TEILENUMMER_SQL_FILE
 
 
 def _wagensuche_pg_dsn() -> Optional[str]:
@@ -1501,7 +1766,21 @@ def _ips_company_division(env: str | None) -> tuple[str, str]:
     normalized = _normalize_env(env or DEFAULT_ENV)
     if normalized == "tst" and (IPS_COMPANY_TST or IPS_DIVISION_TST):
         return IPS_COMPANY_TST, IPS_DIVISION_TST
-    return IPS_COMPANY, IPS_DIVISION
+    company = IPS_COMPANY
+    division = IPS_DIVISION
+    # Keep IPS on the same company as MI if no dedicated IPS company is configured.
+    if not company:
+        company = _mi_cono(normalized)
+    return company, division
+
+
+def _mi_cono(env: str | None) -> str:
+    normalized = _normalize_env(env or DEFAULT_ENV)
+    if normalized == "tst":
+        return MI_CONO_TST or MI_CONO
+    if normalized == "prd":
+        return MI_CONO_PRD or MI_CONO
+    return MI_CONO
 
 
 def _build_ips_envelope(
@@ -1626,6 +1905,8 @@ def _append_api_log(
             handle.write("\n")
     except Exception:  # noqa: BLE001
         pass
+    if bool(dry_run):
+        _append_dryrun_trace_entry(entry)
 
 
 def _clear_api_log() -> None:
@@ -1636,17 +1917,72 @@ def _clear_api_log() -> None:
         pass
 
 
-def _build_mos125_params(row: sqlite3.Row, mode: str = "out") -> Dict[str, str]:
+def _reset_dryrun_trace(job_name: str, env: str) -> None:
+    global _dryrun_trace_seq
+    with _dryrun_trace_lock:
+        _dryrun_trace_seq = 0
+        started = datetime.utcnow().isoformat(sep=" ", timespec="seconds")
+        lines = [
+            "# MFDAPPS DryRun API Trace",
+            f"# Job: {job_name}",
+            f"# Env: {env}",
+            f"# Started (UTC): {started}",
+            "# Format: seq | ts | env | action | api | method url | ok | status | wagon | params",
+            "",
+        ]
+        DRYRUN_TRACE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        DRYRUN_TRACE_PATH.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _append_dryrun_trace_entry(entry: Dict[str, Any]) -> None:
+    global _dryrun_trace_seq
+    try:
+        with _dryrun_trace_lock:
+            _dryrun_trace_seq += 1
+            seq = _dryrun_trace_seq
+            ts = str(entry.get("ts") or "")
+            env = str(entry.get("env") or "")
+            action = str(entry.get("action") or "")
+            program = str(entry.get("program") or "")
+            transaction = str(entry.get("transaction") or "")
+            api_name = f"{program}.{transaction}" if (program or transaction) else "-"
+            request = entry.get("request") if isinstance(entry.get("request"), dict) else {}
+            method = str(request.get("method") or "")
+            url = str(request.get("url") or "")
+            ok = "OK" if bool(entry.get("ok")) else "ERR"
+            status = str(entry.get("status") or "")
+            wagon_obj = entry.get("wagon") if isinstance(entry.get("wagon"), dict) else {}
+            wagon_old = f"{wagon_obj.get('itno', '')}/{wagon_obj.get('sern', '')}".strip("/")
+            wagon_new = f"{wagon_obj.get('new_itno', '')}/{wagon_obj.get('new_sern', '')}".strip("/")
+            wagon = f"{wagon_old} -> {wagon_new}" if wagon_new else wagon_old
+            params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
+            params_json = json.dumps(params, ensure_ascii=True, default=str, separators=(",", ":"))
+            line = (
+                f"{seq:05d} | {ts} | {env} | {action} | {api_name} | "
+                f"{method} {url} | {ok} | {status} | {wagon} | {params_json}"
+            )
+            with DRYRUN_TRACE_PATH.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+                handle.write("\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _build_mos125_params(row: sqlite3.Row, mode: str = "out", env: str | None = None) -> Dict[str, str]:
     cfgr = _row_value(row, "CFGL", "MFGL")
     level = _hierarchy_level(cfgr)
     base_trtm = 10000 + (level * 1000)
+    planned_out_date = _sanitize_yyyymmdd(_row_value(row, "PLAN_OUT_DATE"))
+    planned_out_time = _sanitize_hhmmss(_row_value(row, "PLAN_OUT_TIME"))
+    planned_in_date = _sanitize_yyyymmdd(_row_value(row, "PLAN_IN_DATE"))
+    planned_in_time = _sanitize_hhmmss(_row_value(row, "PLAN_IN_TIME"))
     params = {
         "RITP": "UMA",
         "RESP": "CHRUPP",
-        "TRDT": _format_yyyymmdd(_row_value(row, "UMBAU_DATUM")),
+        "TRDT": planned_out_date or _format_yyyymmdd(_row_value(row, "UMBAU_DATUM")),
         "WHLO": "ZUM",
         "RSC4": "UMB",
-        "TRTM": str(base_trtm),
+        "TRTM": planned_out_time or str(base_trtm),
     }
     if mode == "in":
         new_baureihe = _row_value(row, "NEW_BAUREIHE")
@@ -1671,7 +2007,8 @@ def _build_mos125_params(row: sqlite3.Row, mode: str = "out") -> Dict[str, str]:
         part_itno = _row_value(row, "NEW_PART_ITNO") or _row_value(row, "ITNO")
         part_ser2 = _row_value(row, "NEW_PART_SER2") or _row_value(row, "SER2")
         params["RITP"] = "UME"
-        params["TRTM"] = str(base_trtm + 10)
+        params["TRDT"] = planned_in_date or params["TRDT"]
+        params["TRTM"] = planned_in_time or str(base_trtm + 10)
         params["CFGL"] = cfgr
         params["TWSL"] = "EINBAU"
         params["NHAI"] = parent_itno
@@ -1711,12 +2048,15 @@ def _build_mos125_params(row: sqlite3.Row, mode: str = "out") -> Dict[str, str]:
         params["NHSR"] = _row_value(row, "SERN")
         params["ITNR"] = _row_value(row, "ITNO")
         params["BANR"] = _row_value(row, "SER2")
+    cono = _mi_cono(env)
+    if cono:
+        params["CONO"] = cono
     return params
 
 
-def _build_mos170_params(row: sqlite3.Row) -> Dict[str, str]:
+def _build_mos170_params(row: sqlite3.Row, env: str | None = None) -> Dict[str, str]:
     umbau_datum = _format_yyyymmdd(_row_value(row, "UMBAU_DATUM"))
-    return {
+    params = {
         "ITNO": _row_value(row, "ITNO"),
         "BANO": _row_value(row, "SER2"),
         "STRT": "002",
@@ -1726,12 +2066,22 @@ def _build_mos170_params(row: sqlite3.Row) -> Dict[str, str]:
         "RESP": "CHRUPP",
         "WHLO": "ZUM",
     }
+    cono = _mi_cono(env)
+    if cono:
+        params["CONO"] = cono
+    return params
 
 
 # BEGIN WAGON RENNUMBERING
-def _build_mos170_wagon_params(itno: str, sern: str, umbau_datum: str, whlo: str) -> Dict[str, str]:
+def _build_mos170_wagon_params(
+    itno: str,
+    sern: str,
+    umbau_datum: str,
+    whlo: str,
+    env: str | None = None,
+) -> Dict[str, str]:
     umbau_value = _format_yyyymmdd(umbau_datum)
-    return {
+    params = {
         "ITNO": itno,
         "BANO": sern,
         "STRT": "002",
@@ -1741,6 +2091,10 @@ def _build_mos170_wagon_params(itno: str, sern: str, umbau_datum: str, whlo: str
         "RESP": "CHRUPP",
         "WHLO": whlo,
     }
+    cono = _mi_cono(env)
+    if cono:
+        params["CONO"] = cono
+    return params
 # END WAGON RENNUMBERING
 
 def _extract_plpn(response: Any) -> str:
@@ -1758,12 +2112,16 @@ def _extract_plpn(response: Any) -> str:
     return ""
 
 
-def _build_cms100_params(plpn: str) -> Dict[str, str]:
-    return {
+def _build_cms100_params(plpn: str, env: str | None = None) -> Dict[str, str]:
+    params = {
         "QOPLPN": plpn,
         "QOPLPS": "0",
         "QOPLP2": "0",
     }
+    cono = _mi_cono(env)
+    if cono:
+        params["CONO"] = cono
+    return params
 
 
 def _build_ips_mos100_params(row: sqlite3.Row) -> Dict[str, str]:
@@ -1779,13 +2137,17 @@ def _build_ips_mos100_params(row: sqlite3.Row) -> Dict[str, str]:
     }
 
 
-def _build_mos180_params(row: sqlite3.Row) -> Dict[str, str]:
-    return {
+def _build_mos180_params(row: sqlite3.Row, env: str | None = None) -> Dict[str, str]:
+    params = {
         "FACI": MOS180_FACI,
         "MWNO": _row_value(row, "MWNO"),
         "RESP": MOS180_RESP,
         "APRB": MOS180_APRB,
     }
+    cono = _mi_cono(env)
+    if cono:
+        params["CONO"] = cono
+    return params
 
 
 def _build_mos050_params(row: sqlite3.Row) -> Dict[str, str]:
@@ -1802,9 +2164,72 @@ def _build_mos050_params(row: sqlite3.Row) -> Dict[str, str]:
     }
 
 
+def _sanitize_yyyymmdd(value: Any) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if len(digits) < 8:
+        return ""
+    return digits[:8]
+
+
+def _sanitize_hhmmss(value: Any) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if not digits:
+        return ""
+    return digits.zfill(6)[:6]
+
+
+def _parse_delay_minutes(value: Any) -> int | None:
+    raw = str(value or "").strip()
+    if raw == "":
+        return None
+    try:
+        minutes = int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Verzögerung muss eine ganze Zahl sein.") from None
+    if minutes < 0:
+        raise HTTPException(status_code=400, detail="Verzögerung darf nicht negativ sein.")
+    return minutes
+
+
+def _resolve_teilenummer_base_datetime(row: Mapping[str, Any]) -> datetime:
+    rgdt = _sanitize_yyyymmdd(_row_value(row, "RGDT"))
+    rgtm = _sanitize_hhmmss(_row_value(row, "RGTM")) or "000000"
+    if rgdt:
+        try:
+            return datetime.strptime(f"{rgdt}{rgtm}", "%Y%m%d%H%M%S")
+        except ValueError:
+            pass
+    return datetime.now()
+
+
+def _compute_teilenummer_plan_times(
+    row: Mapping[str, Any],
+    out_delay_min: int | None,
+    in_delay_min: int | None,
+) -> Dict[str, str]:
+    out_minutes = max(0, int(out_delay_min or 0))
+    in_minutes = max(0, int(in_delay_min or 0))
+    if out_minutes == 0 and in_minutes == 0:
+        now_dt = datetime.now()
+        out_dt = now_dt
+        in_dt = now_dt + timedelta(minutes=1)
+    else:
+        base_dt = _resolve_teilenummer_base_datetime(row)
+        out_dt = base_dt + timedelta(minutes=out_minutes)
+        in_dt = out_dt + timedelta(minutes=in_minutes)
+    return {
+        "PLAN_OUT_DATE": out_dt.strftime("%Y%m%d"),
+        "PLAN_OUT_TIME": out_dt.strftime("%H%M%S"),
+        "PLAN_IN_DATE": in_dt.strftime("%Y%m%d"),
+        "PLAN_IN_TIME": in_dt.strftime("%H%M%S"),
+    }
+
+
 def _resolve_teilenummer_umbau_datum(row: sqlite3.Row) -> str:
     return (
-        _row_value(row, "TIMESTAMP")
+        _row_value(row, "PLAN_OUT_DATE")
+        or _row_value(row, "RGDT")
+        or _row_value(row, "TIMESTAMP")
         or _row_value(row, "A_BIRT")
         or datetime.utcnow().strftime("%Y%m%d")
     )
@@ -1825,7 +2250,25 @@ def _build_teilenummer_row_map(row: sqlite3.Row, new_itno: str, new_sern: str) -
         "NEW_PART_SER2": new_sern,
         "WAGEN_ITNO": parent_itno,
         "WAGEN_SERN": parent_sern,
+        "OUT_DELAY_MIN": _row_value(row, "OUT_DELAY_MIN"),
+        "IN_DELAY_MIN": _row_value(row, "IN_DELAY_MIN"),
+        "PLAN_OUT_DATE": _row_value(row, "PLAN_OUT_DATE"),
+        "PLAN_OUT_TIME": _row_value(row, "PLAN_OUT_TIME"),
+        "PLAN_IN_DATE": _row_value(row, "PLAN_IN_DATE"),
+        "PLAN_IN_TIME": _row_value(row, "PLAN_IN_TIME"),
+        "RGDT": _row_value(row, "RGDT"),
+        "RGTM": _row_value(row, "RGTM"),
     }
+
+
+def _is_teilenummer_leading_object(row: Mapping[str, Any]) -> bool:
+    parent_itno = _row_value(row, "MTRL", "C_MTRL")
+    parent_sern = _row_value(row, "SERN", "C_SERN")
+    itno = _row_value(row, "ITNO", "A_ITNO")
+    sern = _row_value(row, "SER2", "A_SERN")
+    if not parent_itno or not parent_sern:
+        return True
+    return parent_itno == itno and parent_sern == sern
 
 
 def _teilenummer_log_context(row: sqlite3.Row, new_itno: str, new_sern: str) -> Dict[str, str]:
@@ -1912,12 +2355,17 @@ def _build_sts046_params(whlo: str, geit: str, itno: str, bano: str) -> Dict[str
 
 def _ensure_wagon_data(table: str, env: str) -> str:
     env_table = _table_for(table, env)
+    teilenummer_sql = _teilenummer_sql_file(env) if table == TEILENUMMER_TABLE else None
     with _connect() as conn:
         if _table_exists(conn, env_table):
+            if table == TEILENUMMER_TABLE:
+                columns = _columns_from_sql_file(teilenummer_sql or TEILENUMMER_SQL_FILE)
+                _ensure_columns(conn, env_table, columns + ["CHECKED"])
+                conn.commit()
             return env_table
 
-    if table == TEILENUMMER_TABLE and TEILENUMMER_SQL_FILE.exists():
-        sql_file = TEILENUMMER_SQL_FILE
+    if table == TEILENUMMER_TABLE and (teilenummer_sql and teilenummer_sql.exists()):
+        sql_file = teilenummer_sql
     else:
         sql_file = _wagons_sql_file(env)
     result = _run_compass_to_sqlite(sql_file, env_table, env)
@@ -1938,7 +2386,8 @@ def _create_teilenummer_tausch_table(
     columns = _table_columns(conn, source_table)
     if not columns:
         raise HTTPException(status_code=400, detail=f"Tabelle {source_table} hat keine Spalten.")
-    all_columns = columns + TEILENUMMER_TAUSCH_EXTRA_COLUMNS
+    extra_columns = [col for col in TEILENUMMER_TAUSCH_EXTRA_COLUMNS if col not in columns]
+    all_columns = columns + extra_columns
     conn.execute(f'DROP TABLE IF EXISTS "{target_table}"')
     column_defs = ", ".join(f'"{col}" TEXT' for col in all_columns)
     conn.execute(f'CREATE TABLE "{target_table}" ({column_defs})')
@@ -2119,6 +2568,54 @@ def meta_cache_status(table: str = Query(TEILENUMMER_TABLE)) -> dict:
     }
 
 
+@app.get("/api/datalake-sync/datalake/tables")
+def datalake_tables(
+    env: str = Query("live"),
+    autostart: bool = Query(False),
+) -> dict:
+    normalized = _normalize_env(env)
+    # Refresh intentionally only starts via explicit POST /refresh.
+    # GET must stay read-only so opening the page never starts a long-running job.
+    _ = autostart
+    return _datalake_snapshot(normalized)
+
+
+@app.post("/api/datalake-sync/datalake/tables/refresh")
+def datalake_tables_refresh(
+    env: str = Query("live"),
+    force: bool = Query(False),
+) -> dict:
+    normalized = _normalize_env(env)
+    return _datalake_start_refresh(normalized, force=force)
+
+
+@app.get("/api/datalake-sync/table-detail")
+def datalake_table_detail(
+    table: str = Query(..., min_length=1),
+    env: str = Query("live"),
+) -> dict:
+    normalized = _normalize_env(env)
+    return _datalake_table_detail(normalized, table)
+
+
+@app.post("/api/datalake-sync/table-sync-selection")
+def datalake_table_sync_selection(
+    payload: dict = Body(...),
+    env: str = Query("live"),
+) -> dict:
+    normalized = _normalize_env(env)
+    table_name = str(payload.get("table_name") or "").strip().lower()
+    enabled = bool(payload.get("enabled"))
+    if not table_name or not _DATALAKE_TABLE_NAME_PATTERN.fullmatch(table_name):
+        raise HTTPException(status_code=400, detail="Ungueltiger Tabellenname.")
+    _datalake_set_sync_selection(normalized, table_name, enabled)
+    return {
+        "env": _datalake_env_label(normalized),
+        "table_name": table_name,
+        "sync_selected": enabled,
+    }
+
+
 @app.get("/api/wagons/count")
 def wagons_count(
     table: str = DEFAULT_TABLE,
@@ -2213,7 +2710,7 @@ def _run_compass_to_sqlite(sql_file: Path, table: str, env: str) -> subprocess.C
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
-def _run_compass_query(sql: str, env: str) -> Dict[str, Any]:
+def _run_compass_query_internal(sql: str, env: str, timeout_seconds: int | None = None) -> Dict[str, Any]:
     ionapi = _ionapi_path(env, "compass")
     normalized = _normalize_env(env)
     cmd = [
@@ -2234,17 +2731,1341 @@ def _run_compass_query(sql: str, env: str) -> Dict[str, Any]:
         cmd.extend(["--default-collection", DEFAULT_COLLECTION])
     if normalized == "tst" and TST_COMPASS_JDBC.exists():
         cmd.extend(["--jdbc-jar", str(TST_COMPASS_JDBC)])
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    run_timeout = int(timeout_seconds) if timeout_seconds and timeout_seconds > 0 else None
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=run_timeout)
+    except subprocess.TimeoutExpired as exc:
+        timeout_label = f"{run_timeout}s" if run_timeout else "unbekannt"
+        raise TimeoutError(f"Compass-Query Timeout nach {timeout_label}") from exc
     if result.returncode != 0:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Compass-Query fehlgeschlagen: {result.stderr or result.stdout}",
-        )
+        raise RuntimeError(f"Compass-Query fehlgeschlagen: {result.stderr or result.stdout}")
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail=f"Ungültiges Compass-JSON: {exc}") from exc
+        raise RuntimeError(f"Ungültiges Compass-JSON: {exc}") from exc
     return payload.get("result") or {}
+
+
+def _run_compass_query(sql: str, env: str) -> Dict[str, Any]:
+    try:
+        return _run_compass_query_internal(sql, env)
+    except TimeoutError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _datalake_env_label(normalized_env: str) -> str:
+    return "live" if normalized_env == "prd" else "tst"
+
+
+def _datalake_safe_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    iso = getattr(value, "isoformat", None)
+    if callable(iso):
+        try:
+            return iso()
+        except Exception:
+            pass
+    return str(value)
+
+
+def _datalake_jdbc_path(normalized_env: str) -> Path:
+    if normalized_env == "tst" and TST_COMPASS_JDBC.exists():
+        return TST_COMPASS_JDBC
+    jdbc_dir = CREDENTIALS_ROOT / "jdbc"
+    preferred = sorted(jdbc_dir.glob("infor-compass-jdbc-*.jar"), reverse=True)
+    if preferred:
+        return preferred[0]
+    fallback = sorted(jdbc_dir.glob("*.jar"))
+    if fallback:
+        return fallback[0]
+    raise FileNotFoundError(f"Compass JDBC JAR nicht gefunden unter: {jdbc_dir}")
+
+
+def _datalake_support_jars(jdbc_path: Path) -> List[str]:
+    jars = [str(jdbc_path)]
+    for extra in sorted(jdbc_path.parent.glob("slf4j-*.jar")):
+        if extra.resolve() != jdbc_path.resolve():
+            jars.append(str(extra))
+    return jars
+
+
+def _datalake_ensure_driver_ionapi(ionapi_path: Path, jdbc_path: Path) -> None:
+    target = jdbc_path.parent / ionapi_path.name
+    try:
+        if ionapi_path.resolve() == target.resolve():
+            return
+    except OSError:
+        pass
+    if target.exists():
+        return
+    target.write_text(ionapi_path.read_text(encoding="utf-8-sig"), encoding="utf-8")
+
+
+def _datalake_rows_to_dicts(description: Any, rows: List[Any]) -> List[Dict[str, Any]]:
+    columns = [desc[0].strip("\"'") if isinstance(desc[0], str) else str(desc[0]) for desc in (description or [])]
+    return [
+        {col: _datalake_safe_value(val) for col, val in zip(columns, row)}
+        for row in rows
+    ]
+
+
+def _datalake_choose_timestamp_column(columns: List[Dict[str, Any]]) -> str | None:
+    by_name: Dict[str, str] = {}
+    for col in columns:
+        col_name = str(col.get("COLUMN_NAME") or "").strip()
+        if not col_name:
+            continue
+        by_name[col_name.lower()] = col_name
+    for preferred in _DATALAKE_TIMESTAMP_PREFERRED_COLUMNS:
+        match = by_name.get(preferred)
+        if match:
+            return match
+    for col in columns:
+        col_name = str(col.get("COLUMN_NAME") or "").strip()
+        if not col_name:
+            continue
+        data_type = str(col.get("DATA_TYPE") or "").lower()
+        if any(token in data_type for token in _DATALAKE_TIMESTAMP_TYPE_HINTS):
+            return col_name
+    return None
+
+
+def _datalake_quote_identifier(identifier: str) -> str:
+    value = str(identifier or "").strip()
+    if not value or not DATALAKE_SAFE_IDENTIFIER.match(value):
+        raise ValueError(f"Ungueltiger SQL Identifier: {identifier}")
+    return f'"{value}"'
+
+
+def _fabric_quote_identifier(identifier: str) -> str:
+    value = str(identifier or "").strip()
+    if not value or not DATALAKE_SAFE_IDENTIFIER.match(value):
+        raise ValueError(f"Ungueltiger SQL Identifier: {identifier}")
+    return f"[{value}]"
+
+
+def _datalake_connect_fabric_sql():
+    try:
+        mod = importlib.import_module("app")
+    except Exception as exc:
+        raise RuntimeError(f"Fabric-Modul konnte nicht geladen werden: {exc}") from exc
+    connect_fn = getattr(mod, "_connect_fabric_sql", None)
+    if not callable(connect_fn):
+        raise RuntimeError("Fabric-SQL-Verbindung nicht verfügbar (_connect_fabric_sql fehlt).")
+    return connect_fn()
+
+
+def _normalize_timestamp_for_compare(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace(" ", "T").replace("Z", ""))
+        return parsed.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return text.lower()
+
+
+def _datalake_normalize_timeout_tier(value: Any) -> str:
+    tier = str(value or "").strip().lower()
+    if tier not in _DATALAKE_TIMEOUT_TIERS:
+        return "normal"
+    return tier
+
+
+def _datalake_timeout_seconds_for_tier(tier: str) -> int:
+    normalized = _datalake_normalize_timeout_tier(tier)
+    if normalized == "timeout":
+        return _DATALAKE_TIMEOUT_RETRY_SECONDS
+    if normalized == "superheavy":
+        return _DATALAKE_TIMEOUT_SUPERHEAVY_SECONDS
+    return _DATALAKE_TIMEOUT_DEFAULT_SECONDS
+
+
+def _datalake_next_timeout_tier(tier: str) -> str:
+    normalized = _datalake_normalize_timeout_tier(tier)
+    if normalized == "normal":
+        return "timeout"
+    if normalized == "timeout":
+        return "superheavy"
+    return "superheavy"
+
+
+def _is_timeout_error(exc: Any) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    message = str(exc or "").lower()
+    return (
+        "timeout" in message
+        or "time out" in message
+        or "query timeout" in message
+        or "statement timeout" in message
+        or "hyt00" in message
+    )
+
+
+def _datalake_record_get(row: Dict[str, Any], key: str, default: Any = None) -> Any:
+    if key in row:
+        return row.get(key)
+    key_lower = str(key).lower()
+    for row_key, row_value in row.items():
+        if str(row_key).lower() == key_lower:
+            return row_value
+    return default
+
+
+def _datalake_compare_status(
+    datalake_status: str,
+    fabric_status: str,
+    datalake_row_count: int | None,
+    datalake_field_count: int | None,
+    datalake_last_update: str | None,
+    fabric_row_count: int | None,
+    fabric_field_count: int | None,
+    fabric_last_update: str | None,
+) -> str:
+    if datalake_status == "timeout" or fabric_status == "timeout":
+        return "timeout"
+    if datalake_status == "error" or fabric_status == "error":
+        return "error"
+    if fabric_status == "missing":
+        return "missing"
+    if datalake_status != "ok" or fabric_status != "ok":
+        return "pending"
+    same_counts = datalake_row_count == fabric_row_count
+    same_fields = datalake_field_count == fabric_field_count
+    same_update = (
+        _normalize_timestamp_for_compare(datalake_last_update)
+        == _normalize_timestamp_for_compare(fabric_last_update)
+    )
+    return "equal" if (same_counts and same_fields and same_update) else "diff"
+
+
+def _datalake_normalize_data_type(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text).strip()
+    base = text.split("(", 1)[0].strip()
+    if base.startswith("timestamp") or base.startswith("datetime"):
+        return "timestamp"
+    if base in {"character varying", "varchar", "nvarchar", "string"}:
+        return "varchar"
+    if base in {"character", "char", "nchar"}:
+        return "char"
+    if base in {"integer", "int", "int4", "signed", "bigint", "int8"}:
+        return "int_family"
+    if base in {"smallint", "int2", "tinyint"}:
+        return "smallint"
+    if base in {"decimal", "numeric", "number"}:
+        return "numeric"
+    if base in {"double precision", "double", "float8"}:
+        return "double"
+    if base in {"real", "float4"}:
+        return "real"
+    if base in {"boolean", "bool", "bit"}:
+        return "boolean"
+    return base
+
+
+def _datalake_sync_selection_map(normalized_env: str) -> Dict[str, bool]:
+    env_label = _datalake_env_label(normalized_env)
+    try:
+        with _connect() as conn:
+            _ensure_datalake_cache_tables(conn)
+            rows = conn.execute(
+                f"""
+                SELECT table_name, enabled
+                FROM {DATALAKE_SYNC_SELECTION_TABLE}
+                WHERE env = ?
+                """,
+                (env_label,),
+            ).fetchall()
+    except Exception:
+        return {}
+    result: Dict[str, bool] = {}
+    for row in rows:
+        table_name = str(row["table_name"] or "").strip().lower()
+        if not table_name:
+            continue
+        enabled_raw = row["enabled"]
+        enabled = str(enabled_raw or "").strip().lower() in {"1", "true", "yes", "y"}
+        result[table_name] = enabled
+    return result
+
+
+def _datalake_set_sync_selection(normalized_env: str, table_name: str, enabled: bool) -> None:
+    env_label = _datalake_env_label(normalized_env)
+    now_utc = datetime.utcnow().isoformat() + "Z"
+    with _connect() as conn:
+        _ensure_datalake_cache_tables(conn)
+        conn.execute(
+            f"""
+            INSERT INTO {DATALAKE_SYNC_SELECTION_TABLE} (env, table_name, enabled, updated_at_utc)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(env, table_name) DO UPDATE SET
+                enabled=excluded.enabled,
+                updated_at_utc=excluded.updated_at_utc
+            """,
+            (env_label, table_name, 1 if enabled else 0, now_utc),
+        )
+        conn.commit()
+
+
+def _datalake_table_detail(normalized_env: str, table_name: str) -> Dict[str, Any]:
+    clean_table = str(table_name or "").strip().lower()
+    if not clean_table or not _DATALAKE_TABLE_NAME_PATTERN.fullmatch(clean_table):
+        raise HTTPException(status_code=400, detail="Ungueltiger Tabellenname.")
+
+    snapshot = _datalake_snapshot(normalized_env)
+    table_entry = next(
+        (item for item in (snapshot.get("tables") or []) if str(item.get("table_name") or "").lower() == clean_table),
+        None,
+    )
+    if table_entry is None:
+        raise HTTPException(status_code=404, detail=f"Tabelle '{clean_table}' nicht im Snapshot gefunden.")
+
+    sync_selection = _datalake_sync_selection_map(normalized_env)
+    if str(table_entry.get("fabric_status") or "").strip().lower() == "missing":
+        return {
+            "env": _datalake_env_label(normalized_env),
+            "table": table_entry,
+            "sync_selected": bool(sync_selection.get(clean_table)),
+            "fabric_exists": False,
+            "fabric_error": None,
+            "field_counts": {
+                "datalake": int(table_entry.get("field_count") or 0),
+                "fabric": 0,
+            },
+            "field_status_counts": {
+                "missing": 0,
+                "type_mismatch": 0,
+                "match": 0,
+            },
+            "field_differences": [],
+        }
+
+    try:
+        datalake_result = _run_compass_query_internal(
+            "SELECT COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION "
+            "FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA = 'default' "
+            f"AND TABLE_NAME = '{clean_table}' "
+            "ORDER BY ORDINAL_POSITION",
+            normalized_env,
+            timeout_seconds=20,
+        )
+        datalake_rows = datalake_result.get("rows") or []
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"DataLake-Spalten konnten nicht geladen werden: {exc}") from exc
+
+    datalake_columns: List[Dict[str, Any]] = []
+    for row in datalake_rows:
+        col_name = str(_datalake_record_get(row, "COLUMN_NAME") or "").strip()
+        if not col_name:
+            continue
+        datalake_columns.append(
+            {
+                "column_name": col_name,
+                "data_type": str(_datalake_record_get(row, "DATA_TYPE") or "").strip(),
+                "ordinal_position": int(_datalake_record_get(row, "ORDINAL_POSITION") or 0),
+            }
+        )
+
+    fabric_columns: List[Dict[str, Any]] = []
+    fabric_exists = False
+    fabric_error = None
+    fabric_conn = None
+    try:
+        fabric_conn = _datalake_connect_fabric_sql()
+        fabric_cur = fabric_conn.cursor()
+        try:
+            setattr(fabric_cur, "timeout", 20)
+        except Exception:
+            pass
+        fabric_cur.execute(
+            "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
+            "WHERE TABLE_SCHEMA = 'landing' AND TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME = ?",
+            (clean_table,),
+        )
+        fabric_exists = fabric_cur.fetchone() is not None
+        if fabric_exists:
+            fabric_cur.execute(
+                "SELECT COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION "
+                "FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = 'landing' AND TABLE_NAME = ? "
+                "ORDER BY ORDINAL_POSITION",
+                (clean_table,),
+            )
+            fabric_rows = _datalake_rows_to_dicts(fabric_cur.description, fabric_cur.fetchall())
+            for row in fabric_rows:
+                col_name = str(_datalake_record_get(row, "COLUMN_NAME") or "").strip()
+                if not col_name:
+                    continue
+                fabric_columns.append(
+                    {
+                        "column_name": col_name,
+                        "data_type": str(_datalake_record_get(row, "DATA_TYPE") or "").strip(),
+                        "ordinal_position": int(_datalake_record_get(row, "ORDINAL_POSITION") or 0),
+                    }
+                )
+    except Exception as exc:
+        fabric_error = str(exc)
+    finally:
+        try:
+            if fabric_conn is not None:
+                fabric_conn.close()
+        except Exception:
+            pass
+
+    field_differences: List[Dict[str, Any]] = []
+    if not fabric_error:
+        datalake_by_name = {str(col.get("column_name") or "").lower(): col for col in datalake_columns}
+        fabric_by_name = {str(col.get("column_name") or "").lower(): col for col in fabric_columns}
+        all_names = sorted(set(datalake_by_name) | set(fabric_by_name))
+        for lower_name in all_names:
+            dl_col = datalake_by_name.get(lower_name)
+            fb_col = fabric_by_name.get(lower_name)
+            if dl_col is None and fb_col is not None:
+                field_differences.append(
+                    {
+                        "column_name": fb_col.get("column_name") or lower_name,
+                        "datalake_type": None,
+                        "fabric_type": fb_col.get("data_type"),
+                        "status": "missing_in_datalake",
+                    }
+                )
+                continue
+            if fb_col is None and dl_col is not None:
+                field_differences.append(
+                    {
+                        "column_name": dl_col.get("column_name") or lower_name,
+                        "datalake_type": dl_col.get("data_type"),
+                        "fabric_type": None,
+                        "status": "missing_in_fabric",
+                    }
+                )
+                continue
+            dl_type = _datalake_normalize_data_type(dl_col.get("data_type")) if dl_col else ""
+            fb_type = _datalake_normalize_data_type(fb_col.get("data_type")) if fb_col else ""
+            field_differences.append(
+                {
+                    "column_name": (dl_col or fb_col or {}).get("column_name") or lower_name,
+                    "datalake_type": dl_col.get("data_type") if dl_col else None,
+                    "fabric_type": fb_col.get("data_type") if fb_col else None,
+                    "status": "match" if dl_type == fb_type else "type_mismatch",
+                }
+            )
+
+        priority = {
+            "missing_in_fabric": 0,
+            "missing_in_datalake": 0,
+            "type_mismatch": 1,
+            "match": 2,
+        }
+        field_differences.sort(
+            key=lambda item: (
+                priority.get(str(item.get("status") or "match"), 9),
+                str(item.get("column_name") or "").lower(),
+            )
+        )
+
+    missing_count = sum(
+        1
+        for item in field_differences
+        if str(item.get("status") or "") in {"missing_in_fabric", "missing_in_datalake"}
+    )
+    mismatch_count = sum(1 for item in field_differences if str(item.get("status") or "") == "type_mismatch")
+    match_count = sum(1 for item in field_differences if str(item.get("status") or "") == "match")
+
+    return {
+        "env": _datalake_env_label(normalized_env),
+        "table": table_entry,
+        "sync_selected": bool(sync_selection.get(clean_table)),
+        "fabric_exists": fabric_exists,
+        "fabric_error": fabric_error,
+        "field_counts": {
+            "datalake": len(datalake_columns),
+            "fabric": len(fabric_columns),
+        },
+        "field_status_counts": {
+            "missing": missing_count,
+            "type_mismatch": mismatch_count,
+            "match": match_count,
+        },
+        "field_differences": field_differences,
+    }
+
+
+def _ensure_datalake_cache_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {DATALAKE_CACHE_SNAPSHOT_TABLE} (
+            env TEXT PRIMARY KEY,
+            running INTEGER NOT NULL DEFAULT 0,
+            current_table TEXT,
+            phase TEXT,
+            phase_detail TEXT,
+            started_at_utc TEXT,
+            finished_at_utc TEXT,
+            last_error TEXT,
+            total_tables INTEGER NOT NULL DEFAULT 0,
+            completed_tables INTEGER NOT NULL DEFAULT 0,
+            error_tables INTEGER NOT NULL DEFAULT 0,
+            updated_at_utc TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {DATALAKE_CACHE_TABLES_TABLE} (
+            env TEXT NOT NULL,
+            table_name TEXT NOT NULL,
+            row_count INTEGER,
+            field_count INTEGER,
+            last_update TEXT,
+            timeout_tier TEXT NOT NULL DEFAULT 'normal',
+            timeout_seconds INTEGER,
+            timeout_hits INTEGER NOT NULL DEFAULT 0,
+            datalake_status TEXT,
+            datalake_error TEXT,
+            fabric_row_count INTEGER,
+            fabric_field_count INTEGER,
+            fabric_last_update TEXT,
+            fabric_status TEXT,
+            fabric_error TEXT,
+            compare_status TEXT,
+            status TEXT NOT NULL,
+            error TEXT,
+            duration_ms INTEGER,
+            updated_at_utc TEXT NOT NULL,
+            PRIMARY KEY (env, table_name)
+        )
+        """
+    )
+    conn.execute(
+        f"""
+        CREATE INDEX IF NOT EXISTS idx_{DATALAKE_CACHE_TABLES_TABLE.lower()}_status
+        ON {DATALAKE_CACHE_TABLES_TABLE}(env, status)
+        """
+    )
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {DATALAKE_SYNC_SELECTION_TABLE} (
+            env TEXT NOT NULL,
+            table_name TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            updated_at_utc TEXT NOT NULL,
+            PRIMARY KEY (env, table_name)
+        )
+        """
+    )
+    conn.execute(
+        f"""
+        CREATE INDEX IF NOT EXISTS idx_{DATALAKE_SYNC_SELECTION_TABLE.lower()}_enabled
+        ON {DATALAKE_SYNC_SELECTION_TABLE}(env, enabled)
+        """
+    )
+    snapshot_cols = {
+        str(row[1]).lower() for row in conn.execute(f"PRAGMA table_info({DATALAKE_CACHE_SNAPSHOT_TABLE})")
+    }
+    if "current_table" not in snapshot_cols:
+        conn.execute(f"ALTER TABLE {DATALAKE_CACHE_SNAPSHOT_TABLE} ADD COLUMN current_table TEXT")
+    if "phase" not in snapshot_cols:
+        conn.execute(f"ALTER TABLE {DATALAKE_CACHE_SNAPSHOT_TABLE} ADD COLUMN phase TEXT")
+    if "phase_detail" not in snapshot_cols:
+        conn.execute(f"ALTER TABLE {DATALAKE_CACHE_SNAPSHOT_TABLE} ADD COLUMN phase_detail TEXT")
+    table_cols = {
+        str(row[1]).lower() for row in conn.execute(f"PRAGMA table_info({DATALAKE_CACHE_TABLES_TABLE})")
+    }
+    add_columns = {
+        "datalake_status": "TEXT",
+        "datalake_error": "TEXT",
+        "fabric_row_count": "INTEGER",
+        "fabric_field_count": "INTEGER",
+        "fabric_last_update": "TEXT",
+        "fabric_status": "TEXT",
+        "fabric_error": "TEXT",
+        "compare_status": "TEXT",
+        "timeout_tier": "TEXT NOT NULL DEFAULT 'normal'",
+        "timeout_seconds": "INTEGER",
+        "timeout_hits": "INTEGER NOT NULL DEFAULT 0",
+    }
+    for col_name, col_type in add_columns.items():
+        if col_name in table_cols:
+            continue
+        conn.execute(f"ALTER TABLE {DATALAKE_CACHE_TABLES_TABLE} ADD COLUMN {col_name} {col_type}")
+
+
+def _datalake_state_copy(normalized_env: str) -> Dict[str, Any]:
+    with _datalake_tables_lock:
+        state = _datalake_tables_state[normalized_env]
+        return {
+            "running": bool(state.get("running")),
+            "current_table": state.get("current_table"),
+            "phase": state.get("phase"),
+            "phase_detail": state.get("phase_detail"),
+            "started_at_utc": state.get("started_at_utc"),
+            "finished_at_utc": state.get("finished_at_utc"),
+            "last_error": state.get("last_error"),
+            "total_tables": int(state.get("total_tables") or 0),
+            "completed_tables": int(state.get("completed_tables") or 0),
+            "error_tables": int(state.get("error_tables") or 0),
+            "tables": [dict(item) for item in (state.get("tables") or {}).values()],
+        }
+
+
+def _datalake_persist_state(normalized_env: str) -> None:
+    payload = _datalake_state_copy(normalized_env)
+    env_label = _datalake_env_label(normalized_env)
+    now_utc = datetime.utcnow().isoformat() + "Z"
+    try:
+        with _connect() as conn:
+            _ensure_datalake_cache_tables(conn)
+            conn.execute(
+                f"""
+                INSERT INTO {DATALAKE_CACHE_SNAPSHOT_TABLE} (
+                    env, running, current_table, phase, phase_detail,
+                    started_at_utc, finished_at_utc, last_error,
+                    total_tables, completed_tables, error_tables, updated_at_utc
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(env) DO UPDATE SET
+                    running=excluded.running,
+                    current_table=excluded.current_table,
+                    phase=excluded.phase,
+                    phase_detail=excluded.phase_detail,
+                    started_at_utc=excluded.started_at_utc,
+                    finished_at_utc=excluded.finished_at_utc,
+                    last_error=excluded.last_error,
+                    total_tables=excluded.total_tables,
+                    completed_tables=excluded.completed_tables,
+                    error_tables=excluded.error_tables,
+                    updated_at_utc=excluded.updated_at_utc
+                """,
+                (
+                    env_label,
+                    1 if payload["running"] else 0,
+                    str(payload.get("current_table") or "").strip() or None,
+                    str(payload.get("phase") or "").strip() or None,
+                    str(payload.get("phase_detail") or "").strip() or None,
+                    payload["started_at_utc"],
+                    payload["finished_at_utc"],
+                    payload["last_error"],
+                    payload["total_tables"],
+                    payload["completed_tables"],
+                    payload["error_tables"],
+                    now_utc,
+                ),
+            )
+            conn.execute(f"DELETE FROM {DATALAKE_CACHE_TABLES_TABLE} WHERE env = ?", (env_label,))
+            if payload["tables"]:
+                conn.executemany(
+                    f"""
+                    INSERT INTO {DATALAKE_CACHE_TABLES_TABLE} (
+                        env, table_name, row_count, field_count, last_update,
+                        timeout_tier, timeout_seconds, timeout_hits,
+                        datalake_status, datalake_error,
+                        fabric_row_count, fabric_field_count, fabric_last_update,
+                        fabric_status, fabric_error, compare_status,
+                        status, error, duration_ms, updated_at_utc
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            env_label,
+                            str(item.get("table_name") or ""),
+                            item.get("row_count"),
+                            item.get("field_count"),
+                            item.get("last_update"),
+                            _datalake_normalize_timeout_tier(item.get("timeout_tier")),
+                            int(item.get("timeout_seconds") or 0) or _datalake_timeout_seconds_for_tier(
+                                _datalake_normalize_timeout_tier(item.get("timeout_tier"))
+                            ),
+                            int(item.get("timeout_hits") or 0),
+                            item.get("datalake_status"),
+                            item.get("datalake_error"),
+                            item.get("fabric_row_count"),
+                            item.get("fabric_field_count"),
+                            item.get("fabric_last_update"),
+                            item.get("fabric_status"),
+                            item.get("fabric_error"),
+                            item.get("compare_status"),
+                            str(item.get("status") or "pending"),
+                            item.get("error"),
+                            item.get("duration_ms"),
+                            now_utc,
+                        )
+                        for item in payload["tables"]
+                        if item.get("table_name")
+                    ],
+                )
+            conn.commit()
+    except Exception as exc:
+        logging.getLogger("datalake-sync").warning("Persistiere DataLake-Snapshot fehlgeschlagen: %s", exc)
+
+
+def _datalake_load_state_from_db(normalized_env: str) -> None:
+    with _datalake_tables_lock:
+        state = _datalake_tables_state[normalized_env]
+        if state.get("running") or state.get("tables") or int(state.get("total_tables") or 0) > 0:
+            return
+
+    env_label = _datalake_env_label(normalized_env)
+    try:
+        with _connect() as conn:
+            _ensure_datalake_cache_tables(conn)
+            snapshot_row = conn.execute(
+                f"""
+                SELECT
+                    running,
+                    current_table,
+                    phase,
+                    phase_detail,
+                    started_at_utc,
+                    finished_at_utc,
+                    last_error,
+                    total_tables,
+                    completed_tables,
+                    error_tables
+                FROM {DATALAKE_CACHE_SNAPSHOT_TABLE}
+                WHERE env = ?
+                """,
+                (env_label,),
+            ).fetchone()
+            if snapshot_row is None:
+                return
+            table_rows = conn.execute(
+                f"""
+                SELECT
+                    table_name,
+                    row_count,
+                    field_count,
+                    last_update,
+                    timeout_tier,
+                    timeout_seconds,
+                    timeout_hits,
+                    datalake_status,
+                    datalake_error,
+                    fabric_row_count,
+                    fabric_field_count,
+                    fabric_last_update,
+                    fabric_status,
+                    fabric_error,
+                    compare_status,
+                    status,
+                    error,
+                    duration_ms
+                FROM {DATALAKE_CACHE_TABLES_TABLE}
+                WHERE env = ?
+                ORDER BY table_name
+                """,
+                (env_label,),
+            ).fetchall()
+    except Exception as exc:
+        logging.getLogger("datalake-sync").warning("Lade DataLake-Snapshot aus SQLite fehlgeschlagen: %s", exc)
+        return
+
+    loaded_tables = {
+        str(row["table_name"]): {
+            "table_name": str(row["table_name"]),
+            "row_count": row["row_count"],
+            "field_count": row["field_count"],
+            "last_update": row["last_update"],
+            "timeout_tier": _datalake_normalize_timeout_tier(row["timeout_tier"]),
+            "timeout_seconds": int(row["timeout_seconds"] or 0)
+            or _datalake_timeout_seconds_for_tier(row["timeout_tier"]),
+            "timeout_hits": int(row["timeout_hits"] or 0),
+            "datalake_status": row["datalake_status"],
+            "datalake_error": row["datalake_error"],
+            "fabric_row_count": row["fabric_row_count"],
+            "fabric_field_count": row["fabric_field_count"],
+            "fabric_last_update": row["fabric_last_update"],
+            "fabric_status": row["fabric_status"],
+            "fabric_error": row["fabric_error"],
+            "compare_status": row["compare_status"],
+            "status": row["status"] or "pending",
+            "error": row["error"],
+            "duration_ms": row["duration_ms"],
+        }
+        for row in table_rows
+        if row["table_name"]
+    }
+
+    with _datalake_tables_lock:
+        state = _datalake_tables_state[normalized_env]
+        if state.get("running") or state.get("tables") or int(state.get("total_tables") or 0) > 0:
+            return
+        # Persisted "running" can be stale after process restarts; never restore active-running state.
+        state["running"] = False
+        state["current_table"] = None
+        state["phase"] = snapshot_row["phase"]
+        state["phase_detail"] = snapshot_row["phase_detail"]
+        state["started_at_utc"] = snapshot_row["started_at_utc"]
+        state["finished_at_utc"] = snapshot_row["finished_at_utc"]
+        state["last_error"] = snapshot_row["last_error"]
+        state["total_tables"] = int(snapshot_row["total_tables"] or len(loaded_tables))
+        state["completed_tables"] = int(snapshot_row["completed_tables"] or 0)
+        state["error_tables"] = int(snapshot_row["error_tables"] or 0)
+        state["tables"] = loaded_tables
+        _datalake_reconcile_idle_state(state)
+
+
+def _datalake_snapshot(normalized_env: str) -> Dict[str, Any]:
+    _datalake_load_state_from_db(normalized_env)
+    sync_selection = _datalake_sync_selection_map(normalized_env)
+    with _datalake_tables_lock:
+        state = _datalake_tables_state[normalized_env]
+        _datalake_reconcile_idle_state(state)
+        table_items = []
+        for item in sorted(state["tables"].values(), key=lambda table_item: table_item["table_name"]):
+            row = dict(item)
+            table_name = str(row.get("table_name") or "").lower()
+            row["sync_selected"] = bool(sync_selection.get(table_name))
+            table_items.append(row)
+        return {
+            "env": _datalake_env_label(normalized_env),
+            "running": state["running"],
+            "current_table": state.get("current_table"),
+            "phase": state.get("phase"),
+            "phase_detail": state.get("phase_detail"),
+            "started_at_utc": state["started_at_utc"],
+            "finished_at_utc": state["finished_at_utc"],
+            "last_error": state["last_error"],
+            "total_tables": state["total_tables"],
+            "completed_tables": state["completed_tables"],
+            "error_tables": state["error_tables"],
+            "nightly_refresh_prepared": {
+                "enabled": False,
+                "time_local": _DATALAKE_NIGHTLY_PREPARED_TIME,
+            },
+            "tables": table_items,
+        }
+
+
+def _datalake_set_phase(
+    normalized_env: str,
+    phase: str | None,
+    phase_detail: str | None = None,
+    *,
+    persist: bool = True,
+) -> None:
+    with _datalake_tables_lock:
+        state = _datalake_tables_state[normalized_env]
+        state["phase"] = str(phase or "").strip() or None
+        state["phase_detail"] = str(phase_detail or "").strip() or None
+    if persist:
+        _datalake_persist_state(normalized_env)
+
+
+def _datalake_reconcile_idle_state(state: Dict[str, Any]) -> None:
+    if bool(state.get("running")):
+        return
+    state["current_table"] = None
+    total_tables = int(state.get("total_tables") or 0)
+    completed_tables = int(state.get("completed_tables") or 0)
+    phase = str(state.get("phase") or "").strip().lower()
+    if phase in {"queued", "init", "discover_datalake", "discover_fabric", "discover_columns", "processing"}:
+        if total_tables > 0 and completed_tables >= total_tables:
+            state["phase"] = "finished"
+            state["phase_detail"] = "Aktualisierung abgeschlossen."
+        elif total_tables > 0:
+            state["phase"] = "idle"
+            state["phase_detail"] = "Aktualisierung pausiert. Bitte 'Neu laden' klicken."
+        else:
+            state["phase"] = None
+            state["phase_detail"] = None
+    for table in (state.get("tables") or {}).values():
+        status = str(table.get("status") or "").strip().lower()
+        if status == "running":
+            table["status"] = "queued"
+        if str(table.get("datalake_status") or "").strip().lower() == "running":
+            table["datalake_status"] = "pending"
+        if str(table.get("fabric_status") or "").strip().lower() == "running":
+            table["fabric_status"] = "pending"
+
+
+def _datalake_refresh_worker(normalized_env: str) -> None:
+    try:
+        _datalake_set_phase(normalized_env, "init", "Verbindungen werden aufgebaut ...")
+        try:
+            import jaydebeapi  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(f"jaydebeapi nicht verfügbar: {exc}") from exc
+        ionapi_path = _ionapi_path(normalized_env, "compass")
+        jdbc_path = _datalake_jdbc_path(normalized_env)
+        _datalake_ensure_driver_ionapi(ionapi_path, jdbc_path)
+        ion_cfg = json.loads(ionapi_path.read_text(encoding="utf-8-sig"))
+        tenant = str(ion_cfg.get("ti") or "").strip()
+        if not tenant:
+            raise RuntimeError(f"Tenant 'ti' fehlt in {ionapi_path}")
+        props = {
+            "ION_API_CREDENTIALS": json.dumps(ion_cfg),
+            "TENANT": tenant,
+        }
+        jdbc_url = f"jdbc:infordatalake://{tenant}"
+        datalake_conn = jaydebeapi.connect(
+            "com.infor.idl.jdbc.Driver",
+            jdbc_url,
+            props,
+            jars=_datalake_support_jars(jdbc_path),
+        )
+        fabric_conn = None
+        try:
+            _datalake_set_phase(normalized_env, "discover_datalake", "DataLake Tabellen werden geladen ...")
+            datalake_cur = datalake_conn.cursor()
+            datalake_cur.execute(
+                "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
+                "WHERE TABLE_SCHEMA = 'default' AND TABLE_TYPE = 'BASE TABLE' "
+                "ORDER BY TABLE_NAME"
+            )
+            table_rows = _datalake_rows_to_dicts(datalake_cur.description, datalake_cur.fetchall())
+            table_names = []
+            for row in table_rows:
+                raw_name = str(row.get("TABLE_NAME", "")).strip()
+                if not raw_name:
+                    continue
+                if not _DATALAKE_TABLE_NAME_PATTERN.fullmatch(raw_name):
+                    continue
+                table_names.append(raw_name.lower())
+            with _datalake_tables_lock:
+                state = _datalake_tables_state[normalized_env]
+                existing_tables = dict(state.get("tables") or {})
+                state["current_table"] = None
+                state["total_tables"] = len(table_names)
+                state["tables"] = {
+                    table_name: {
+                        "timeout_tier": _datalake_normalize_timeout_tier(
+                            existing_tables.get(table_name, {}).get("timeout_tier")
+                        ),
+                        "timeout_seconds": int(existing_tables.get(table_name, {}).get("timeout_seconds") or 0)
+                        or _datalake_timeout_seconds_for_tier(
+                            existing_tables.get(table_name, {}).get("timeout_tier")
+                        ),
+                        "timeout_hits": int(existing_tables.get(table_name, {}).get("timeout_hits") or 0),
+                        "table_name": table_name,
+                        "row_count": existing_tables.get(table_name, {}).get("row_count"),
+                        "field_count": existing_tables.get(table_name, {}).get("field_count"),
+                        "last_update": existing_tables.get(table_name, {}).get("last_update"),
+                        "datalake_status": existing_tables.get(table_name, {}).get("datalake_status"),
+                        "datalake_error": existing_tables.get(table_name, {}).get("datalake_error"),
+                        "fabric_row_count": existing_tables.get(table_name, {}).get("fabric_row_count"),
+                        "fabric_field_count": existing_tables.get(table_name, {}).get("fabric_field_count"),
+                        "fabric_last_update": existing_tables.get(table_name, {}).get("fabric_last_update"),
+                        "fabric_status": existing_tables.get(table_name, {}).get("fabric_status"),
+                        "fabric_error": existing_tables.get(table_name, {}).get("fabric_error"),
+                        "compare_status": existing_tables.get(table_name, {}).get("compare_status"),
+                        "status": "pending",
+                        "error": None,
+                        "duration_ms": None,
+                    }
+                    for table_name in table_names
+                }
+            _datalake_persist_state(normalized_env)
+
+            fabric_tables: set[str] = set()
+            fabric_columns_by_table: Dict[str, List[Dict[str, Any]]] = {}
+            fabric_global_error: str | None = None
+            fabric_cur = None
+            columns_by_table: Dict[str, List[Dict[str, Any]]] = {}
+            table_metadata: Dict[str, Dict[str, Any]] = {}
+            matching_tables: List[str] = []
+            matching_set: set[str] = set()
+            try:
+                _datalake_set_phase(normalized_env, "discover_fabric", "Fabric Tabellen werden geladen ...")
+                fabric_conn = _datalake_connect_fabric_sql()
+                fabric_cur = fabric_conn.cursor()
+                fabric_cur.execute(
+                    "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
+                    "WHERE TABLE_SCHEMA = 'landing' AND TABLE_TYPE = 'BASE TABLE'"
+                )
+                fabric_table_rows = _datalake_rows_to_dicts(fabric_cur.description, fabric_cur.fetchall())
+                fabric_tables = {
+                    str(row.get("TABLE_NAME") or "").strip().lower()
+                    for row in fabric_table_rows
+                    if row.get("TABLE_NAME")
+                }
+                matching_tables = [table_name for table_name in table_names if table_name in fabric_tables]
+                matching_set = set(matching_tables)
+                if matching_tables:
+                    _datalake_set_phase(
+                        normalized_env,
+                        "discover_columns",
+                        f"Spaltenmetadaten werden geladen ({len(matching_tables)} Tabellen) ...",
+                    )
+                    placeholders = ", ".join("?" for _ in matching_tables)
+                    datalake_cur.execute(
+                        "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE "
+                        "FROM INFORMATION_SCHEMA.COLUMNS "
+                        "WHERE TABLE_SCHEMA = 'default' "
+                        f"AND TABLE_NAME IN ({placeholders}) "
+                        "ORDER BY TABLE_NAME, ORDINAL_POSITION",
+                        matching_tables,
+                    )
+                    datalake_column_rows = _datalake_rows_to_dicts(
+                        datalake_cur.description, datalake_cur.fetchall()
+                    )
+                    for row in datalake_column_rows:
+                        table_name = str(row.get("TABLE_NAME") or "").lower()
+                        if not table_name:
+                            continue
+                        columns_by_table.setdefault(table_name, []).append(row)
+
+                    fabric_cur.execute(
+                        "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE "
+                        "FROM INFORMATION_SCHEMA.COLUMNS "
+                        "WHERE TABLE_SCHEMA = 'landing' "
+                        f"AND TABLE_NAME IN ({placeholders}) "
+                        "ORDER BY TABLE_NAME, ORDINAL_POSITION",
+                        matching_tables,
+                    )
+                    fabric_column_rows = _datalake_rows_to_dicts(
+                        fabric_cur.description, fabric_cur.fetchall()
+                    )
+                    for row in fabric_column_rows:
+                        table_name = str(row.get("TABLE_NAME") or "").strip().lower()
+                        if not table_name:
+                            continue
+                        fabric_columns_by_table.setdefault(table_name, []).append(row)
+
+                    for table_name in matching_tables:
+                        cols = columns_by_table.get(table_name, [])
+                        table_metadata[table_name] = {
+                            "timestamp_col": _datalake_choose_timestamp_column(cols),
+                        }
+            except Exception as exc:
+                fabric_global_error = str(exc)
+                matching_tables = []
+                matching_set = set()
+
+            with _datalake_tables_lock:
+                state = _datalake_tables_state[normalized_env]
+                if fabric_global_error:
+                    state["current_table"] = None
+                    state["phase"] = "error"
+                    state["phase_detail"] = "Fabric Metadaten konnten nicht geladen werden."
+                    for table_name in table_names:
+                        state["completed_tables"] += 1
+                        state["error_tables"] += 1
+                        state["tables"][table_name] = {
+                            "timeout_tier": _datalake_normalize_timeout_tier(
+                                state["tables"].get(table_name, {}).get("timeout_tier")
+                            ),
+                            "timeout_seconds": int(state["tables"].get(table_name, {}).get("timeout_seconds") or 0)
+                            or _datalake_timeout_seconds_for_tier(
+                                state["tables"].get(table_name, {}).get("timeout_tier")
+                            ),
+                            "timeout_hits": int(state["tables"].get(table_name, {}).get("timeout_hits") or 0),
+                            "table_name": table_name,
+                            "row_count": None,
+                            "field_count": None,
+                            "last_update": None,
+                            "datalake_status": "skipped",
+                            "datalake_error": None,
+                            "fabric_row_count": None,
+                            "fabric_field_count": None,
+                            "fabric_last_update": None,
+                            "fabric_status": "error",
+                            "fabric_error": fabric_global_error,
+                            "compare_status": "error",
+                            "status": "error",
+                            "error": f"FB: {fabric_global_error}",
+                            "duration_ms": 0,
+                        }
+                else:
+                    state["phase"] = "processing"
+                    state["phase_detail"] = "Tabellenvergleich wird vorbereitet ..."
+                    for table_name in table_names:
+                        if table_name in matching_set:
+                            state["tables"][table_name]["status"] = "queued"
+                            state["tables"][table_name]["compare_status"] = "pending"
+                            state["tables"][table_name]["datalake_status"] = "pending"
+                            state["tables"][table_name]["fabric_status"] = "pending"
+                            continue
+                        state["completed_tables"] += 1
+                        state["tables"][table_name] = {
+                            "timeout_tier": _datalake_normalize_timeout_tier(
+                                state["tables"].get(table_name, {}).get("timeout_tier")
+                            ),
+                            "timeout_seconds": int(state["tables"].get(table_name, {}).get("timeout_seconds") or 0)
+                            or _datalake_timeout_seconds_for_tier(
+                                state["tables"].get(table_name, {}).get("timeout_tier")
+                            ),
+                            "timeout_hits": int(state["tables"].get(table_name, {}).get("timeout_hits") or 0),
+                            "table_name": table_name,
+                            "row_count": None,
+                            "field_count": None,
+                            "last_update": None,
+                            "datalake_status": "skipped",
+                            "datalake_error": None,
+                            "fabric_row_count": None,
+                            "fabric_field_count": None,
+                            "fabric_last_update": None,
+                            "fabric_status": "missing",
+                            "fabric_error": None,
+                            "compare_status": "missing",
+                            "status": "missing",
+                            "error": None,
+                            "duration_ms": 0,
+                        }
+            _datalake_persist_state(normalized_env)
+
+            for table_name in matching_tables:
+                with _datalake_tables_lock:
+                    state = _datalake_tables_state[normalized_env]
+                    state["current_table"] = table_name
+                    state["phase"] = "processing"
+                    state["phase_detail"] = f"Tabelle {table_name} wird geprüft ..."
+                    item = dict((state.get("tables") or {}).get(table_name) or {})
+                    item["table_name"] = table_name
+                    item["status"] = "running"
+                    item["datalake_status"] = "running"
+                    item["fabric_status"] = "running"
+                    item["compare_status"] = "pending"
+                    item["error"] = None
+                    item["duration_ms"] = None
+                    state["tables"][table_name] = item
+                _datalake_persist_state(normalized_env)
+
+                started = time.perf_counter()
+                persist_now = False
+                with _datalake_tables_lock:
+                    current_item = dict(
+                        (_datalake_tables_state[normalized_env].get("tables") or {}).get(table_name) or {}
+                    )
+                timeout_tier = _datalake_normalize_timeout_tier(current_item.get("timeout_tier"))
+                timeout_hits = int(current_item.get("timeout_hits") or 0)
+                timeout_seconds = _datalake_timeout_seconds_for_tier(timeout_tier)
+                datalake_status = "pending"
+                datalake_error = None
+                datalake_timed_out = False
+                row_count: int | None = None
+                field_count = len(columns_by_table.get(table_name, []))
+                last_update = None
+                try:
+                    if not DATALAKE_SAFE_IDENTIFIER.match(table_name):
+                        raise ValueError(f"Ungueltiger Tabellenname: {table_name}")
+                    meta = table_metadata.get(table_name, {})
+                    timestamp_col = str(meta.get("timestamp_col") or "").strip() or None
+                    last_update_sql = (
+                        f'MAX({_datalake_quote_identifier(timestamp_col)}) AS last_update'
+                        if timestamp_col
+                        else "NULL AS last_update"
+                    )
+                    table_sql = _datalake_quote_identifier(table_name)
+                    datalake_result = _run_compass_query_internal(
+                        "SELECT "
+                        f"COUNT(*) AS row_count, {last_update_sql} "
+                        f"FROM default.{table_sql}",
+                        normalized_env,
+                        timeout_seconds=timeout_seconds,
+                    )
+                    count_rows = datalake_result.get("rows") or []
+                    stats = count_rows[0] if count_rows else {}
+                    row_count_raw = _datalake_record_get(stats, "row_count", 0)
+                    row_count = int(row_count_raw or 0)
+                    last_update_raw = _datalake_record_get(stats, "last_update")
+                    last_update = str(last_update_raw).strip() if last_update_raw is not None else None
+                    if last_update == "":
+                        last_update = None
+                    datalake_status = "ok"
+                except Exception as exc:
+                    datalake_status = "timeout" if _is_timeout_error(exc) else "error"
+                    datalake_error = str(exc)
+                    datalake_timed_out = datalake_status == "timeout"
+
+                fabric_row_count: int | None = None
+                fabric_field_count: int | None = None
+                fabric_last_update: str | None = None
+                fabric_status = "pending"
+                fabric_error = None
+                fabric_timed_out = False
+                fabric_cols = fabric_columns_by_table.get(table_name, [])
+                fabric_field_count = len(fabric_cols)
+                fabric_timestamp_col = _datalake_choose_timestamp_column(fabric_cols)
+                try:
+                    table_sql = _fabric_quote_identifier(table_name)
+                    fabric_last_sql = (
+                        f"MAX({_fabric_quote_identifier(fabric_timestamp_col)}) AS last_update"
+                        if fabric_timestamp_col
+                        else "NULL AS last_update"
+                    )
+                    if fabric_cur is None:
+                        raise RuntimeError("Fabric Cursor nicht verfügbar.")
+                    try:
+                        setattr(fabric_cur, "timeout", int(timeout_seconds))
+                    except Exception:
+                        pass
+                    fabric_cur.execute(
+                        "SELECT "
+                        f"COUNT_BIG(*) AS row_count, {fabric_last_sql} "
+                        f"FROM landing.{table_sql}"
+                    )
+                    fabric_rows = _datalake_rows_to_dicts(fabric_cur.description, fabric_cur.fetchall())
+                    fabric_stats = fabric_rows[0] if fabric_rows else {}
+                    fabric_row_count = int(_datalake_record_get(fabric_stats, "row_count") or 0)
+                    fabric_last_update_raw = _datalake_record_get(fabric_stats, "last_update")
+                    fabric_last_update = (
+                        str(fabric_last_update_raw).strip()
+                        if fabric_last_update_raw is not None
+                        else None
+                    )
+                    if fabric_last_update == "":
+                        fabric_last_update = None
+                    fabric_status = "ok"
+                except Exception as exc:
+                    fabric_status = "timeout" if _is_timeout_error(exc) else "error"
+                    fabric_error = str(exc)
+                    fabric_timed_out = fabric_status == "timeout"
+
+                compare_status = _datalake_compare_status(
+                    datalake_status=datalake_status,
+                    fabric_status=fabric_status,
+                    datalake_row_count=row_count,
+                    datalake_field_count=int(field_count) if field_count is not None else None,
+                    datalake_last_update=last_update,
+                    fabric_row_count=fabric_row_count,
+                    fabric_field_count=fabric_field_count,
+                    fabric_last_update=fabric_last_update,
+                )
+                if compare_status == "timeout":
+                    overall_status = "timeout"
+                elif compare_status == "error":
+                    overall_status = "error"
+                elif compare_status == "equal":
+                    overall_status = "ok"
+                elif compare_status == "diff":
+                    overall_status = "done"
+                else:
+                    overall_status = "pending"
+
+                if datalake_timed_out or fabric_timed_out:
+                    timeout_tier = _datalake_next_timeout_tier(timeout_tier)
+                    timeout_hits += 1
+                elif datalake_status == "ok" and fabric_status == "ok":
+                    timeout_tier = "normal"
+                timeout_seconds = _datalake_timeout_seconds_for_tier(timeout_tier)
+
+                error_parts = []
+                if datalake_error:
+                    error_parts.append(f"DL: {datalake_error}")
+                if fabric_error:
+                    error_parts.append(f"FB: {fabric_error}")
+                overall_error = " | ".join(error_parts) if error_parts else None
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                with _datalake_tables_lock:
+                    state = _datalake_tables_state[normalized_env]
+                    state["current_table"] = None
+                    state["phase"] = "processing"
+                    state["phase_detail"] = (
+                        f"{state['completed_tables'] + 1}/{state['total_tables']} Tabellen verarbeitet"
+                    )
+                    state["completed_tables"] += 1
+                    if overall_status in {"error", "timeout"}:
+                        state["error_tables"] += 1
+                    state["tables"][table_name] = {
+                        "timeout_tier": timeout_tier,
+                        "timeout_seconds": timeout_seconds,
+                        "timeout_hits": timeout_hits,
+                        "table_name": table_name,
+                        "row_count": row_count,
+                        "field_count": field_count,
+                        "last_update": last_update,
+                        "datalake_status": datalake_status,
+                        "datalake_error": datalake_error,
+                        "fabric_row_count": fabric_row_count,
+                        "fabric_field_count": fabric_field_count,
+                        "fabric_last_update": fabric_last_update,
+                        "fabric_status": fabric_status,
+                        "fabric_error": fabric_error,
+                        "compare_status": compare_status,
+                        "status": overall_status,
+                        "error": overall_error,
+                        "duration_ms": duration_ms,
+                    }
+                    persist_now = (state["completed_tables"] % 10 == 0) or overall_status in {"error", "timeout"}
+                if persist_now:
+                    _datalake_persist_state(normalized_env)
+        finally:
+            try:
+                if fabric_conn is not None:
+                    fabric_conn.close()
+            except Exception:
+                pass
+            datalake_conn.close()
+    except Exception as exc:
+        with _datalake_tables_lock:
+            state = _datalake_tables_state[normalized_env]
+            state["last_error"] = str(exc)
+            state["current_table"] = None
+            state["phase"] = "error"
+            state["phase_detail"] = str(exc)
+    finally:
+        with _datalake_tables_lock:
+            state = _datalake_tables_state[normalized_env]
+            state["running"] = False
+            state["current_table"] = None
+            if state.get("phase") != "error":
+                state["phase"] = "finished"
+                state["phase_detail"] = "Aktualisierung abgeschlossen."
+            state["finished_at_utc"] = datetime.utcnow().isoformat() + "Z"
+        _datalake_persist_state(normalized_env)
+
+
+def _datalake_start_refresh(normalized_env: str, force: bool = False) -> Dict[str, Any]:
+    should_start = False
+    with _datalake_tables_lock:
+        state = _datalake_tables_state[normalized_env]
+        if state["running"]:
+            pass
+        elif state["total_tables"] > 0 and not force:
+            pass
+        else:
+            state["running"] = True
+            state["current_table"] = None
+            state["phase"] = "queued"
+            state["phase_detail"] = "Job wurde gestartet ..."
+            state["started_at_utc"] = datetime.utcnow().isoformat() + "Z"
+            state["finished_at_utc"] = None
+            state["last_error"] = None
+            state["completed_tables"] = 0
+            state["error_tables"] = 0
+            existing_tables = state.get("tables") or {}
+            if existing_tables:
+                state["total_tables"] = len(existing_tables)
+                for table_name, table in existing_tables.items():
+                    table["table_name"] = table_name
+                    tier = _datalake_normalize_timeout_tier(table.get("timeout_tier"))
+                    table["timeout_tier"] = tier
+                    table["timeout_seconds"] = int(table.get("timeout_seconds") or 0) or _datalake_timeout_seconds_for_tier(tier)
+                    table["timeout_hits"] = int(table.get("timeout_hits") or 0)
+                    table["status"] = "queued"
+                    table["error"] = None
+                    table["datalake_status"] = "pending"
+                    table["datalake_error"] = None
+                    table["fabric_status"] = "pending"
+                    table["fabric_error"] = None
+                    table["compare_status"] = "pending"
+                    table["duration_ms"] = None
+            else:
+                state["total_tables"] = 0
+                state["tables"] = {}
+            should_start = True
+    if should_start:
+        _datalake_persist_state(normalized_env)
+        threading.Thread(
+            target=_datalake_refresh_worker,
+            args=(normalized_env,),
+            daemon=True,
+        ).start()
+    return _datalake_snapshot(normalized_env)
 
 
 def _fetch_msy_text(txid: str, env: str) -> str:
@@ -2697,10 +4518,11 @@ def reload_database(
 
 @app.post("/api/teilenummer/reload")
 def reload_teilenummer(env: str = Query(DEFAULT_ENV)) -> dict:
-    if not TEILENUMMER_SQL_FILE.exists():
-        raise HTTPException(status_code=500, detail=f"SQL-Datei nicht gefunden: {TEILENUMMER_SQL_FILE}")
+    sql_file = _teilenummer_sql_file(env)
+    if not sql_file.exists():
+        raise HTTPException(status_code=500, detail=f"SQL-Datei nicht gefunden: {sql_file}")
     table_name = _table_for(TEILENUMMER_TABLE, env)
-    result = _run_compass_to_sqlite(TEILENUMMER_SQL_FILE, table_name, env)
+    result = _run_compass_to_sqlite(sql_file, table_name, env)
     if result.returncode != 0:
         raise HTTPException(
             status_code=500,
@@ -2798,37 +4620,314 @@ def wagensuche_maps_key() -> dict:
 
 @app.post("/api/teilenummer/check")
 def teilenummer_check(payload: dict = Body(...), env: str = Query(DEFAULT_ENV)) -> dict:
+    rowid = payload.get("ROWID") or payload.get("rowid")
     birt = payload.get("A_BIRT")
     itno = payload.get("A_ITNO")
     sern = payload.get("A_SERN")
     checked = payload.get("checked")
-    if not birt or not itno or not sern:
-        raise HTTPException(status_code=400, detail="A_BIRT/A_ITNO/A_SERN fehlt.")
+    out_delay_min = _parse_delay_minutes(payload.get("out_delay_min"))
+    in_delay_min = _parse_delay_minutes(payload.get("in_delay_min"))
     table_name = _table_for(TEILENUMMER_TABLE, env)
     with _connect() as conn:
         if not _table_exists(conn, table_name):
             raise HTTPException(status_code=404, detail=f"Tabelle {table_name} nicht gefunden.")
-        _ensure_columns(conn, table_name, ["CHECKED"])
-        value = "1" if bool(checked) else ""
-        cursor = conn.execute(
-            f'UPDATE "{table_name}" SET "CHECKED" = ? WHERE "A_BIRT" = ? AND "A_ITNO" = ? AND "A_SERN" = ?',
-            (value, birt, itno, sern),
+        _ensure_columns(
+            conn,
+            table_name,
+            ["CHECKED", "OUT_DELAY_MIN", "IN_DELAY_MIN", "PLAN_OUT_DATE", "PLAN_OUT_TIME", "PLAN_IN_DATE", "PLAN_IN_TIME"],
         )
+        value = "1" if bool(checked) else ""
+        plan_times = None
+        out_delay_value = ""
+        in_delay_value = ""
+        if rowid not in (None, ""):
+            try:
+                rowid_value = int(rowid)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="ROWID ist ungültig.") from None
+            row = conn.execute(
+                f'SELECT rowid AS ROWID, * FROM "{table_name}" WHERE rowid = ? LIMIT 1',
+                (rowid_value,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Datensatz nicht gefunden.")
+            if value:
+                plan_times = _compute_teilenummer_plan_times(dict(row), out_delay_min, in_delay_min)
+                out_delay_value = "" if out_delay_min is None else str(out_delay_min)
+                in_delay_value = "" if in_delay_min is None else str(in_delay_min)
+            cursor = conn.execute(
+                f'''UPDATE "{table_name}"
+                    SET "CHECKED" = ?,
+                        "OUT_DELAY_MIN" = ?,
+                        "IN_DELAY_MIN" = ?,
+                        "PLAN_OUT_DATE" = ?,
+                        "PLAN_OUT_TIME" = ?,
+                        "PLAN_IN_DATE" = ?,
+                        "PLAN_IN_TIME" = ?
+                    WHERE rowid = ?''',
+                (
+                    value,
+                    out_delay_value,
+                    in_delay_value,
+                    (plan_times or {}).get("PLAN_OUT_DATE", ""),
+                    (plan_times or {}).get("PLAN_OUT_TIME", ""),
+                    (plan_times or {}).get("PLAN_IN_DATE", ""),
+                    (plan_times or {}).get("PLAN_IN_TIME", ""),
+                    rowid_value,
+                ),
+            )
+        else:
+            if not birt or not itno or not sern:
+                raise HTTPException(status_code=400, detail="ROWID oder A_BIRT/A_ITNO/A_SERN fehlt.")
+            row = conn.execute(
+                f'''SELECT rowid AS ROWID, * FROM "{table_name}"
+                    WHERE "A_BIRT" = ? AND "A_ITNO" = ? AND "A_SERN" = ?
+                    ORDER BY rowid ASC
+                    LIMIT 1''',
+                (birt, itno, sern),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Datensatz nicht gefunden.")
+            if value:
+                plan_times = _compute_teilenummer_plan_times(dict(row), out_delay_min, in_delay_min)
+                out_delay_value = "" if out_delay_min is None else str(out_delay_min)
+                in_delay_value = "" if in_delay_min is None else str(in_delay_min)
+            cursor = conn.execute(
+                f'''UPDATE "{table_name}"
+                    SET "CHECKED" = ?,
+                        "OUT_DELAY_MIN" = ?,
+                        "IN_DELAY_MIN" = ?,
+                        "PLAN_OUT_DATE" = ?,
+                        "PLAN_OUT_TIME" = ?,
+                        "PLAN_IN_DATE" = ?,
+                        "PLAN_IN_TIME" = ?
+                    WHERE "A_BIRT" = ? AND "A_ITNO" = ? AND "A_SERN" = ?''',
+                (
+                    value,
+                    out_delay_value,
+                    in_delay_value,
+                    (plan_times or {}).get("PLAN_OUT_DATE", ""),
+                    (plan_times or {}).get("PLAN_OUT_TIME", ""),
+                    (plan_times or {}).get("PLAN_IN_DATE", ""),
+                    (plan_times or {}).get("PLAN_IN_TIME", ""),
+                    birt,
+                    itno,
+                    sern,
+                ),
+            )
         conn.commit()
     return {
         "table": table_name,
         "matched": cursor.rowcount,
         "checked": bool(checked),
+        "out_delay_min": out_delay_min,
+        "in_delay_min": in_delay_min,
+        "plan_times": plan_times or {},
+        "env": _normalize_env(env),
+    }
+
+
+@app.post("/api/teilenummer/excel/validate")
+def teilenummer_validate_excel(
+    payload: dict = Body(...),
+    env: str = Query(DEFAULT_ENV),
+) -> dict:
+    filename = str(payload.get("filename") or "").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="Dateiname fehlt.")
+
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".xlsx", ".xlsm", ".xls"}:
+        raise HTTPException(status_code=400, detail="Ungültiges Dateiformat. Bitte Excel-Datei hochladen.")
+
+    content_b64 = str(payload.get("content_b64") or "").strip()
+    if not content_b64:
+        raise HTTPException(status_code=400, detail="Excel-Inhalt fehlt.")
+    try:
+        import base64
+        content = base64.b64decode(content_b64, validate=True)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Excel-Inhalt ist ungültig: {exc}") from exc
+
+    if not content:
+        raise HTTPException(status_code=400, detail="Excel-Datei ist leer.")
+    out_delay_min = _parse_delay_minutes(payload.get("out_delay_min"))
+    in_delay_min = _parse_delay_minutes(payload.get("in_delay_min"))
+
+    try:
+        workbook = load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Excel konnte nicht gelesen werden: {exc}") from exc
+
+    sheet = workbook.active
+    mappings: List[Dict[str, str]] = []
+    seen_old_keys: set[str] = set()
+    for row_index, row in enumerate(sheet.iter_rows(min_row=2, max_col=4, values_only=True), start=2):
+        old_itno = str(row[0] or "").strip()
+        old_sern = str(row[1] or "").strip()
+        new_itno = str(row[2] or "").strip()
+        new_sern = str(row[3] or "").strip()
+        if not old_itno and not old_sern and not new_itno and not new_sern:
+            continue
+        if not old_itno or not old_sern or not new_itno or not new_sern:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Excel ungültig: Zeile {row_index}: Spalten A-D müssen befüllt sein.",
+            )
+        old_key = f"{old_itno}||{old_sern}"
+        if old_key in seen_old_keys:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Excel ungültig: Zeile {row_index}: Duplikat für alte Position {old_itno}/{old_sern}.",
+            )
+        seen_old_keys.add(old_key)
+        mappings.append(
+            {
+                "old_itno": old_itno,
+                "old_sern": old_sern,
+                "new_itno": new_itno,
+                "new_sern": new_sern,
+                "row": str(row_index),
+            }
+        )
+
+    if not mappings:
+        raise HTTPException(status_code=400, detail="Excel enthält keine Datenzeilen ab Zeile 2.")
+
+    table_name = _ensure_wagon_data(TEILENUMMER_TABLE, env)
+    with _connect() as conn:
+        rows = conn.execute(
+            f'SELECT "A_ITNO", "A_SERN", "RGDT", "RGTM" FROM "{table_name}"'
+        ).fetchall()
+
+    existing_itnos = {str(row["A_ITNO"] or "").strip() for row in rows if row["A_ITNO"]}
+    existing_serns = {str(row["A_SERN"] or "").strip() for row in rows if row["A_SERN"]}
+    existing_pairs = {
+        f'{str(row["A_ITNO"] or "").strip()}||{str(row["A_SERN"] or "").strip()}'
+        for row in rows
+        if row["A_ITNO"] and row["A_SERN"]
+    }
+    rows_by_key = {
+        f'{str(row["A_ITNO"] or "").strip()}||{str(row["A_SERN"] or "").strip()}': row
+        for row in rows
+        if row["A_ITNO"] and row["A_SERN"]
+    }
+
+    validated: List[Dict[str, str]] = []
+    for entry in mappings:
+        row_label = entry["row"]
+        old_itno = entry["old_itno"]
+        old_sern = entry["old_sern"]
+        new_itno = entry["new_itno"]
+        new_sern = entry["new_sern"]
+        old_key = f"{old_itno}||{old_sern}"
+
+        if old_key not in existing_pairs:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Excel ungültig: Zeile {row_label}: alte Position {old_itno}/{old_sern} existiert nicht im System.",
+            )
+        if new_itno not in existing_itnos:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Excel ungültig: Zeile {row_label}: neue ITNO '{new_itno}' existiert nicht im System.",
+            )
+        if new_sern in existing_serns:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Excel ungültig: Zeile {row_label}: neue SERN '{new_sern}' existiert bereits im System.",
+            )
+        source_row = rows_by_key.get(old_key)
+        plan_times = _compute_teilenummer_plan_times(
+            source_row or {},
+            out_delay_min,
+            in_delay_min,
+        )
+
+        validated.append(
+            {
+                "old_itno": old_itno,
+                "old_sern": old_sern,
+                "new_itno": new_itno,
+                "new_sern": new_sern,
+                "out_delay_min": "" if out_delay_min is None else str(out_delay_min),
+                "in_delay_min": "" if in_delay_min is None else str(in_delay_min),
+                "PLAN_OUT_DATE": plan_times["PLAN_OUT_DATE"],
+                "PLAN_OUT_TIME": plan_times["PLAN_OUT_TIME"],
+                "PLAN_IN_DATE": plan_times["PLAN_IN_DATE"],
+                "PLAN_IN_TIME": plan_times["PLAN_IN_TIME"],
+            }
+        )
+
+    with _connect() as conn:
+        _ensure_columns(
+            conn,
+            table_name,
+            ["OUT_DELAY_MIN", "IN_DELAY_MIN", "PLAN_OUT_DATE", "PLAN_OUT_TIME", "PLAN_IN_DATE", "PLAN_IN_TIME"],
+        )
+        for entry in validated:
+            conn.execute(
+                f'''UPDATE "{table_name}"
+                    SET "OUT_DELAY_MIN" = ?,
+                        "IN_DELAY_MIN" = ?,
+                        "PLAN_OUT_DATE" = ?,
+                        "PLAN_OUT_TIME" = ?,
+                        "PLAN_IN_DATE" = ?,
+                        "PLAN_IN_TIME" = ?
+                    WHERE "A_ITNO" = ? AND "A_SERN" = ?''',
+                (
+                    entry["out_delay_min"],
+                    entry["in_delay_min"],
+                    entry["PLAN_OUT_DATE"],
+                    entry["PLAN_OUT_TIME"],
+                    entry["PLAN_IN_DATE"],
+                    entry["PLAN_IN_TIME"],
+                    entry["old_itno"],
+                    entry["old_sern"],
+                ),
+            )
+        conn.commit()
+
+    return {
+        "filename": filename,
+        "count": len(validated),
+        "mappings": validated,
+        "out_delay_min": out_delay_min if out_delay_min is not None else "",
+        "in_delay_min": in_delay_min if in_delay_min is not None else "",
         "env": _normalize_env(env),
     }
 
 
 @app.post("/api/teilenummer/prepare")
 def teilenummer_prepare(payload: dict = Body(...), env: str = Query(DEFAULT_ENV)) -> dict:
-    new_itno = (payload.get("new_itno") or "").strip()
-    new_sern = (payload.get("new_sern") or "").strip()
-    if not new_itno:
+    legacy_new_itno = (payload.get("new_itno") or "").strip()
+    legacy_new_sern = (payload.get("new_sern") or "").strip()
+    mappings_payload = payload.get("mappings") or []
+    out_delay_min = _parse_delay_minutes(payload.get("out_delay_min"))
+    in_delay_min = _parse_delay_minutes(payload.get("in_delay_min"))
+
+    mapping_by_key: Dict[str, Dict[str, str]] = {}
+    if isinstance(mappings_payload, list):
+        for entry in mappings_payload:
+            if not isinstance(entry, dict):
+                continue
+            old_itno = str(entry.get("old_itno") or entry.get("A_ITNO") or "").strip()
+            old_sern = str(entry.get("old_sern") or entry.get("A_SERN") or "").strip()
+            new_itno = str(entry.get("new_itno") or entry.get("NITNO") or "").strip()
+            new_sern = str(entry.get("new_sern") or entry.get("NSERN") or "").strip()
+            if not old_itno or not old_sern or not new_itno:
+                continue
+            key = f"{old_itno}||{old_sern}"
+            mapping_by_key[key] = {
+                "old_itno": old_itno,
+                "old_sern": old_sern,
+                "new_itno": new_itno,
+                "new_sern": new_sern,
+            }
+
+    if not mapping_by_key and not legacy_new_itno:
         raise HTTPException(status_code=400, detail="Neue ITNO fehlt.")
+
     source_table = _ensure_wagon_data(TEILENUMMER_TABLE, env)
     target_table = _table_for(TEILENUMMER_TAUSCH_TABLE, env)
     timestamp = datetime.now().isoformat(timespec="seconds")
@@ -2836,60 +4935,151 @@ def teilenummer_prepare(payload: dict = Body(...), env: str = Query(DEFAULT_ENV)
         if not _table_exists(conn, source_table):
             raise HTTPException(status_code=404, detail=f"Tabelle {source_table} nicht gefunden.")
         _ensure_columns(conn, source_table, ["CHECKED"])
-        exists = conn.execute(
-            f'SELECT 1 FROM "{source_table}" WHERE "A_ITNO" = ? LIMIT 1',
-            (new_itno,),
-        ).fetchone()
-        if not exists:
-            raise HTTPException(
-                status_code=400,
-                detail="Neue ITNO existiert nicht in der Teilenummer-Datenbank.",
-            )
+        # Auswahl erfolgt immer über Checkboxen (CHECKED=1).
+        # Excel-Mappings liefern nur die Zielwerte pro markierter Position.
         rows = [
             dict(row)
-            for row in conn.execute(f'SELECT * FROM "{source_table}" WHERE "CHECKED" = "1"')
+            for row in conn.execute(f'SELECT rowid AS "ROWID", * FROM "{source_table}" WHERE "CHECKED" = "1"')
             .fetchall()
         ]
+        if not rows:
+            raise HTTPException(
+                status_code=400,
+                detail="Keine Position markiert. Bitte gewünschte Zeilen per Checkbox auswählen.",
+            )
+
+        if mapping_by_key:
+            rows = [
+                row
+                for row in rows
+                if f"{row.get('A_ITNO', '')}||{row.get('A_SERN', '')}" in mapping_by_key
+            ]
+            if not rows:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Keine markierte Position entspricht dem Excel-Mapping.",
+                )
+
+        if mapping_by_key:
+            candidate_itnos = {
+                mapping_by_key[f"{row.get('A_ITNO', '')}||{row.get('A_SERN', '')}"]["new_itno"]
+                for row in rows
+                if f"{row.get('A_ITNO', '')}||{row.get('A_SERN', '')}" in mapping_by_key
+            }
+        else:
+            candidate_itnos = {legacy_new_itno}
+        missing_itnos: List[str] = []
+        for candidate in sorted(candidate_itnos):
+            exists = conn.execute(
+                f'SELECT 1 FROM "{source_table}" WHERE "A_ITNO" = ? LIMIT 1',
+                (candidate,),
+            ).fetchone()
+            if not exists:
+                missing_itnos.append(candidate)
+        if missing_itnos:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Neue ITNO nicht vorhanden: {', '.join(missing_itnos)}",
+            )
+
         columns = _table_columns(conn, source_table)
-        _create_teilenummer_tausch_table(conn, source_table, target_table)
+        insert_columns = _create_teilenummer_tausch_table(conn, source_table, target_table)
         if rows:
-            insert_columns = columns + TEILENUMMER_TAUSCH_EXTRA_COLUMNS
             placeholders = ", ".join("?" for _ in insert_columns)
             column_list = ", ".join(f'"{col}"' for col in insert_columns)
             insert_sql = f'INSERT INTO "{target_table}" ({column_list}) VALUES ({placeholders})'
             data: List[List[Any]] = []
-            extra_values = {
-                "NITNO": new_itno,
-                "NSERN": new_sern,
-                "UMGEBAUT": "",
-                "TIMESTAMP": timestamp,
-                "OUT_STATUS": "",
-                "MOS170_STATUS": "",
-                "PLPN": "",
-                "CMS100_STATUS": "",
-                "MWNO": "",
-                "MOS100_STATUS": "",
-                "MOS180_STATUS": "",
-                "MOS050_STATUS": "",
-                "IN_STATUS": "",
-            }
             for row in rows:
-                values = [row.get(col, "") for col in columns]
-                values.extend(extra_values.get(col, "") for col in TEILENUMMER_TAUSCH_EXTRA_COLUMNS)
+                key = f"{row.get('A_ITNO', '')}||{row.get('A_SERN', '')}"
+                mapping = mapping_by_key.get(key)
+                resolved_new_itno = (mapping or {}).get("new_itno") or legacy_new_itno
+                resolved_new_sern = (mapping or {}).get("new_sern") or legacy_new_sern
+                # Beim Vorbereiten immer mit den aktuell gesetzten Verzögerungsfeldern rechnen.
+                # So werden alte Planwerte aus früheren Checks nicht versehentlich weiterverwendet.
+                effective_out_delay = out_delay_min
+                effective_in_delay = in_delay_min
+                plan_times = _compute_teilenummer_plan_times(
+                    row,
+                    effective_out_delay,
+                    effective_in_delay,
+                )
+                rowid_value = row.get("ROWID")
+                if rowid_value not in (None, ""):
+                    try:
+                        conn.execute(
+                            f'''UPDATE "{source_table}"
+                                SET "OUT_DELAY_MIN" = ?,
+                                    "IN_DELAY_MIN" = ?,
+                                    "PLAN_OUT_DATE" = ?,
+                                    "PLAN_OUT_TIME" = ?,
+                                    "PLAN_IN_DATE" = ?,
+                                    "PLAN_IN_TIME" = ?
+                                WHERE rowid = ?''',
+                            (
+                                "" if effective_out_delay is None else str(effective_out_delay),
+                                "" if effective_in_delay is None else str(effective_in_delay),
+                                plan_times["PLAN_OUT_DATE"],
+                                plan_times["PLAN_OUT_TIME"],
+                                plan_times["PLAN_IN_DATE"],
+                                plan_times["PLAN_IN_TIME"],
+                                int(rowid_value),
+                            ),
+                        )
+                    except (TypeError, ValueError):
+                        pass
+                extra_values = {
+                    "NITNO": resolved_new_itno,
+                    "NSERN": resolved_new_sern,
+                    "OUT_DELAY_MIN": "" if effective_out_delay is None else str(effective_out_delay),
+                    "IN_DELAY_MIN": "" if effective_in_delay is None else str(effective_in_delay),
+                    "PLAN_OUT_DATE": plan_times["PLAN_OUT_DATE"],
+                    "PLAN_OUT_TIME": plan_times["PLAN_OUT_TIME"],
+                    "PLAN_IN_DATE": plan_times["PLAN_IN_DATE"],
+                    "PLAN_IN_TIME": plan_times["PLAN_IN_TIME"],
+                    "UMGEBAUT": "",
+                    "TIMESTAMP": timestamp,
+                    "OUT_STATUS": "",
+                    "MOS170_STATUS": "",
+                    "PLPN": "",
+                    "CMS100_STATUS": "",
+                    "MWNO": "",
+                    "MOS100_STATUS": "",
+                    "MOS180_STATUS": "",
+                    "MOS050_STATUS": "",
+                    "IN_STATUS": "",
+                }
+                row_values = dict(row)
+                row_values.update(extra_values)
+                values = [row_values.get(col, "") for col in insert_columns]
                 data.append(values)
             conn.executemany(insert_sql, data)
         conn.commit()
     return {
         "table": target_table,
         "count": len(rows),
-        "new_itno": new_itno,
+        "mappings": len(mapping_by_key),
+        "out_delay_min": out_delay_min if out_delay_min is not None else "",
+        "in_delay_min": in_delay_min if in_delay_min is not None else "",
         "env": _normalize_env(env),
+    }
+
+
+@app.get("/api/teilenummer/mode")
+def teilenummer_mode(env: str = Query(DEFAULT_ENV)) -> dict:
+    normalized = _normalize_env(env)
+    dry_run = _effective_dry_run(env)
+    return {
+        "env": normalized,
+        "dry_run": dry_run,
+        "mode": "DRYRUN" if dry_run else "LIVE",
     }
 
 
 @app.post("/api/teilenummer/run")
 def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
     job = _create_job("teilenummer_run", env)
+    normalized_env = _normalize_env(env)
+    run_dry_run = _effective_dry_run(env)
 
     def _worker() -> None:
         try:
@@ -2905,18 +5095,11 @@ def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
             if not rows:
                 raise HTTPException(status_code=404, detail="Keine Daten in TEILENUMMER_TAUSCH.")
 
-            has_new_sern = any(_row_value(row, "NSERN") for row in rows)
-            if has_new_sern and len(rows) > 1:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Neue Seriennummer gesetzt, aber mehr als 1 Datensatz vorhanden.",
-                )
-
             total_steps = len(rows) * 8
             _update_job(job["id"], total=total_steps, processed=0, results=[])
             _append_job_log(job["id"], f"Teilenummer-Ablauf startet: {len(rows)} Datensätze.")
 
-            dry_run = _effective_dry_run(env)
+            dry_run = run_dry_run
             ionapi_path = _ionapi_path(env, "mi")
             ion_cfg = load_ionapi_config(str(ionapi_path))
             base_url = build_base_url(ion_cfg)
@@ -2925,7 +5108,12 @@ def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
                 token = get_access_token_service_account(ion_cfg)
 
             env_label = _normalize_env(env).upper()
+            mode_label = "DRYRUN" if dry_run else "LIVE"
+            _append_job_log(job["id"], f"Betriebsmodus: {env_label} · {mode_label}")
             processed = 0
+            if dry_run:
+                _reset_dryrun_trace("teilenummer_run", env_label)
+                _append_job_log(job["id"], f"DryRun-Trace aktiviert: {DRYRUN_TRACE_PATH}")
 
             with _connect() as conn:
                 for index, row in enumerate(rows, start=1):
@@ -2936,58 +5124,36 @@ def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
                     row_map = _build_teilenummer_row_map(row, new_itno, new_sern)
                     wagon_ctx = _teilenummer_log_context(row, new_itno, new_sern)
 
-                    # MOS125MI Ausbau
-                    params = _build_mos125_params(row_map, mode="out")
-                    request_url = _build_m3_request_url(base_url, "MOS125MI", "RemoveInstall", params)
-                    if not params.get("TRDT"):
-                        ok = False
-                        status_label = "ERROR"
-                        error_message = "UMBAU_DATUM fehlt"
-                        response = {"error": error_message}
-                    elif dry_run:
-                        ok = True
-                        status_label = "DRYRUN"
-                        error_message = None
-                        response = {"dry_run": True}
-                    else:
-                        try:
-                            response = call_m3_mi_get(base_url, token, "MOS125MI", "RemoveInstall", params)
-                            ok, status_label, error_message = _mi_status(response)
-                        except Exception as exc:  # noqa: BLE001
-                            ok = False
-                            status_label = "ERROR"
-                            error_message = str(exc)
-                            response = {"error": error_message}
-                    out_status = status_label if ok else f"{status_label}: {error_message}"
-                    _append_api_log(
-                        "teilenummer_ausbau",
-                        params,
-                        response,
-                        ok,
-                        error_message,
-                        env=env_label,
-                        wagon=wagon_ctx,
-                        dry_run=dry_run,
-                        request_url=request_url,
-                        program="MOS125MI",
-                        transaction="RemoveInstall",
-                    )
-                    _update_teilenummer_row(conn, table_name, row["seq"], {"OUT_STATUS": out_status})
-                    processed += 1
-                    _update_job(job["id"], processed=processed)
+                    row_is_leading = _is_teilenummer_leading_object(row_map)
+                    row_hard_failed = False
+                    skip_after_error = "SKIPPED: vorheriger Schritt fehlgeschlagen"
+                    params: Dict[str, Any] = {}
+                    request_url = ""
 
-                    # MOS170MI AddProp (mit Retry)
-                    plpn = ""
-                    mos170_status = ""
-                    attempt = 1
-                    while True:
-                        params = _build_mos170_params(row_map)
-                        request_url = _build_m3_request_url(base_url, "MOS170MI", "AddProp", params)
-                        required_missing = not params.get("ITNO") or not params.get("BANO") or not params.get("STDT")
-                        if required_missing:
+                    # MOS125MI Ausbau
+                    if row_is_leading:
+                        out_status = "SKIPPED: führendes Objekt (kein Ausbau)"
+                        _append_api_log(
+                            "teilenummer_ausbau",
+                            {},
+                            {"skipped": out_status},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
+                            program="MOS125MI",
+                            transaction="RemoveInstall",
+                            status="SKIPPED",
+                        )
+                    else:
+                        params = _build_mos125_params(row_map, mode="out", env=env)
+                        request_url = _build_m3_request_url(base_url, "MOS125MI", "RemoveInstall", params)
+                        if not params.get("TRDT"):
                             ok = False
                             status_label = "ERROR"
-                            error_message = "Pflichtfelder fehlen"
+                            error_message = "UMBAU_DATUM fehlt"
                             response = {"error": error_message}
                         elif dry_run:
                             ok = True
@@ -2996,31 +5162,53 @@ def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
                             response = {"dry_run": True}
                         else:
                             try:
-                                response = call_m3_mi_get(base_url, token, "MOS170MI", "AddProp", params)
+                                response = call_m3_mi_get(base_url, token, "MOS125MI", "RemoveInstall", params)
                                 ok, status_label, error_message = _mi_status(response)
                             except Exception as exc:  # noqa: BLE001
                                 ok = False
                                 status_label = "ERROR"
                                 error_message = str(exc)
                                 response = {"error": error_message}
-                        plpn = _extract_plpn(response) if ok else ""
-                        if ok and not plpn:
-                            ok = False
-                            status_label = "ERROR"
-                            error_message = "PLPN fehlt"
-                        mos170_status = status_label if ok else f"{status_label}: {error_message}"
+                        out_status = status_label if ok else f"{status_label}: {error_message}"
                         _append_api_log(
-                            "teilenummer_mos170_addprop",
+                            "teilenummer_ausbau",
                             params,
-                            {"plpn": plpn, "response": response},
+                            response,
                             ok,
                             error_message,
                             env=env_label,
                             wagon=wagon_ctx,
                             dry_run=dry_run,
                             request_url=request_url,
+                            program="MOS125MI",
+                            transaction="RemoveInstall",
+                        )
+                        if not ok and not dry_run:
+                            row_hard_failed = True
+                    _update_teilenummer_row(conn, table_name, row["seq"], {"OUT_STATUS": out_status})
+                    processed += 1
+                    _update_job(job["id"], processed=processed)
+
+                    # MOS170MI AddProp (mit Retry)
+                    plpn = ""
+                    mos170_status = ""
+                    params = {}
+                    request_url = ""
+                    if row_hard_failed:
+                        mos170_status = skip_after_error
+                        _append_api_log(
+                            "teilenummer_mos170_addprop",
+                            {},
+                            {"skipped": skip_after_error},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
                             program="MOS170MI",
                             transaction="AddProp",
+                            status="SKIPPED",
                         )
                         _update_teilenummer_row(
                             conn,
@@ -3030,83 +5218,123 @@ def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
                         )
                         processed += 1
                         _update_job(job["id"], processed=processed)
-                        if plpn or dry_run or required_missing:
-                            break
-                        if MOS170_RETRY_MAX and attempt >= MOS170_RETRY_MAX:
-                            break
-                        total_steps += 1
-                        _update_job(job["id"], total=total_steps)
-                        _append_job_log(
-                            job["id"],
-                            f"MOS170MI AddProp: Warte {MOS170_RETRY_DELAY_SEC} Sekunden auf ERP ...",
-                        )
-                        time.sleep(MOS170_RETRY_DELAY_SEC)
-                        attempt += 1
+                    else:
+                        attempt = 1
+                        while True:
+                            params = _build_mos170_params(row_map, env=env)
+                            request_url = _build_m3_request_url(base_url, "MOS170MI", "AddProp", params)
+                            required_missing = not params.get("ITNO") or not params.get("BANO") or not params.get("STDT")
+                            if required_missing:
+                                ok = False
+                                status_label = "ERROR"
+                                error_message = "Pflichtfelder fehlen"
+                                response = {"error": error_message}
+                            elif dry_run:
+                                ok = True
+                                status_label = "DRYRUN"
+                                error_message = None
+                                response = {"dry_run": True}
+                            else:
+                                try:
+                                    response = call_m3_mi_get(base_url, token, "MOS170MI", "AddProp", params)
+                                    ok, status_label, error_message = _mi_status(response)
+                                except Exception as exc:  # noqa: BLE001
+                                    ok = False
+                                    status_label = "ERROR"
+                                    error_message = str(exc)
+                                    response = {"error": error_message}
+                            plpn = _extract_plpn(response) if ok else ""
+                            if ok and not plpn:
+                                ok = False
+                                status_label = "ERROR"
+                                error_message = "PLPN fehlt"
+                            mos170_status = status_label if ok else f"{status_label}: {error_message}"
+                            _append_api_log(
+                                "teilenummer_mos170_addprop",
+                                params,
+                                {"plpn": plpn, "response": response},
+                                ok,
+                                error_message,
+                                env=env_label,
+                                wagon=wagon_ctx,
+                                dry_run=dry_run,
+                                request_url=request_url,
+                                program="MOS170MI",
+                                transaction="AddProp",
+                            )
+                            _update_teilenummer_row(
+                                conn,
+                                table_name,
+                                row["seq"],
+                                {"MOS170_STATUS": mos170_status, "PLPN": plpn},
+                            )
+                            processed += 1
+                            _update_job(job["id"], processed=processed)
+                            if plpn or dry_run or required_missing:
+                                break
+                            if MOS170_RETRY_MAX and attempt >= MOS170_RETRY_MAX:
+                                break
+                            total_steps += 1
+                            _update_job(job["id"], total=total_steps)
+                            _append_job_log(
+                                job["id"],
+                                f"MOS170MI AddProp: Warte {MOS170_RETRY_DELAY_SEC} Sekunden auf ERP ...",
+                            )
+                            time.sleep(MOS170_RETRY_DELAY_SEC)
+                            attempt += 1
+                        if not plpn and not dry_run:
+                            row_hard_failed = True
 
                     # MOS170 PLPN (Log)
-                    _append_api_log(
-                        "teilenummer_mos170_plpn",
-                        params,
-                        {"plpn": plpn},
-                        bool(plpn),
-                        None if plpn else "PLPN fehlt",
-                        env=env_label,
-                        wagon=wagon_ctx,
-                        dry_run=dry_run,
-                        request_url=request_url,
-                        program="MOS170MI",
-                        transaction="AddProp",
-                    )
+                    if row_hard_failed and not plpn:
+                        _append_api_log(
+                            "teilenummer_mos170_plpn",
+                            params,
+                            {"plpn": "", "skipped": skip_after_error},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url=request_url,
+                            program="MOS170MI",
+                            transaction="AddProp",
+                            status="SKIPPED",
+                        )
+                    else:
+                        _append_api_log(
+                            "teilenummer_mos170_plpn",
+                            params,
+                            {"plpn": plpn},
+                            bool(plpn),
+                            None if plpn else "PLPN fehlt",
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url=request_url,
+                            program="MOS170MI",
+                            transaction="AddProp",
+                        )
                     processed += 1
                     _update_job(job["id"], processed=processed)
 
                     # CMS100MI Lst_PLPN_MWNO (mit Retry)
                     mwno = ""
-                    cms_status = ""
-                    attempt = 1
-                    while True:
-                        params = _build_cms100_params(plpn)
-                        request_url = _build_m3_request_url(base_url, "CMS100MI", "Lst_PLPN_MWNO", params)
-                        if not plpn:
-                            ok = False
-                            status_label = "ERROR"
-                            error_message = "PLPN fehlt"
-                            response = {"error": error_message}
-                            mwno = ""
-                        elif dry_run:
-                            ok = True
-                            status_label = "DRYRUN"
-                            error_message = None
-                            response = {"dry_run": True}
-                            mwno = "DRYRUN"
-                        else:
-                            try:
-                                response = call_m3_mi_get(base_url, token, "CMS100MI", "Lst_PLPN_MWNO", params)
-                                ok, status_label, error_message = _mi_status(response)
-                                mwno = _extract_mwno(response) if ok else ""
-                            except Exception as exc:  # noqa: BLE001
-                                ok = False
-                                status_label = "ERROR"
-                                error_message = str(exc)
-                                response = {"error": error_message}
-                                mwno = ""
-                        if ok and not mwno:
-                            ok = False
-                            status_label = "ERROR"
-                            error_message = "MWNO fehlt"
-                        cms_status = status_label if ok else f"{status_label}: {error_message}"
+                    if row_hard_failed:
+                        cms_status = skip_after_error
                         _append_api_log(
                             "teilenummer_cms100_lst_plpn_mwno",
-                            params,
-                            {"qomwno": mwno, "response": response},
-                            ok,
-                            error_message,
+                            {},
+                            {"qomwno": "", "skipped": skip_after_error},
+                            True,
+                            None,
                             env=env_label,
                             wagon=wagon_ctx,
                             dry_run=dry_run,
-                            request_url=request_url,
+                            request_url="",
                             program="CMS100MI",
                             transaction="Lst_PLPN_MWNO",
+                            status="SKIPPED",
                         )
                         _update_teilenummer_row(
                             conn,
@@ -3116,20 +5344,77 @@ def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
                         )
                         processed += 1
                         _update_job(job["id"], processed=processed)
-                        if mwno or dry_run or not plpn:
-                            break
-                        if CMS100_RETRY_MAX and attempt >= CMS100_RETRY_MAX:
-                            break
-                        total_steps += 1
-                        _update_job(job["id"], total=total_steps)
-                        _append_job_log(
-                            job["id"],
-                            f"CMS100MI: Warte {CMS100_RETRY_DELAY_SEC} Sekunden auf ERP ...",
-                        )
-                        time.sleep(CMS100_RETRY_DELAY_SEC)
-                        attempt += 1
+                    else:
+                        cms_status = ""
+                        attempt = 1
+                        while True:
+                            params = _build_cms100_params(plpn, env=env)
+                            request_url = _build_m3_request_url(base_url, "CMS100MI", "Lst_PLPN_MWNO", params)
+                            if not plpn:
+                                ok = False
+                                status_label = "ERROR"
+                                error_message = "PLPN fehlt"
+                                response = {"error": error_message}
+                                mwno = ""
+                            elif dry_run:
+                                ok = True
+                                status_label = "DRYRUN"
+                                error_message = None
+                                response = {"dry_run": True}
+                                mwno = "DRYRUN"
+                            else:
+                                try:
+                                    response = call_m3_mi_get(base_url, token, "CMS100MI", "Lst_PLPN_MWNO", params)
+                                    ok, status_label, error_message = _mi_status(response)
+                                    mwno = _extract_mwno(response) if ok else ""
+                                except Exception as exc:  # noqa: BLE001
+                                    ok = False
+                                    status_label = "ERROR"
+                                    error_message = str(exc)
+                                    response = {"error": error_message}
+                                    mwno = ""
+                            if ok and not mwno:
+                                ok = False
+                                status_label = "ERROR"
+                                error_message = "MWNO fehlt"
+                            cms_status = status_label if ok else f"{status_label}: {error_message}"
+                            _append_api_log(
+                                "teilenummer_cms100_lst_plpn_mwno",
+                                params,
+                                {"qomwno": mwno, "response": response},
+                                ok,
+                                error_message,
+                                env=env_label,
+                                wagon=wagon_ctx,
+                                dry_run=dry_run,
+                                request_url=request_url,
+                                program="CMS100MI",
+                                transaction="Lst_PLPN_MWNO",
+                            )
+                            _update_teilenummer_row(
+                                conn,
+                                table_name,
+                                row["seq"],
+                                {"CMS100_STATUS": cms_status, "MWNO": mwno},
+                            )
+                            processed += 1
+                            _update_job(job["id"], processed=processed)
+                            if mwno or dry_run or not plpn:
+                                break
+                            if CMS100_RETRY_MAX and attempt >= CMS100_RETRY_MAX:
+                                break
+                            total_steps += 1
+                            _update_job(job["id"], total=total_steps)
+                            _append_job_log(
+                                job["id"],
+                                f"CMS100MI: Warte {CMS100_RETRY_DELAY_SEC} Sekunden auf ERP ...",
+                            )
+                            time.sleep(CMS100_RETRY_DELAY_SEC)
+                            attempt += 1
+                        if not mwno and not dry_run:
+                            row_hard_failed = True
 
-                    # IPS MOS100 Chg_SERN (mit Retry)
+                    # IPS MOS100 Chg_SERN (ITNO + SERN)
                     params = {
                         "WorkOrderNumber": mwno,
                         "Product": old_itno,
@@ -3137,46 +5422,14 @@ def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
                         "NewLotNumber": new_sern,
                     }
                     request_url = _build_ips_request_url(base_url, "MOS100")
-                    attempt = 1
-                    ok = False
-                    error_message = None
-                    response = {}
-                    status_label = "NOK"
-                    while True:
-                        if not mwno:
-                            ok = False
-                            status_label = "NOK"
-                            error_message = "MWNO fehlt"
-                            response = {"error": error_message}
-                        elif dry_run:
-                            ok = True
-                            status_label = "DRYRUN"
-                            error_message = None
-                            response = {"dry_run": True}
-                        else:
-                            try:
-                                response = _call_ips_service(
-                                    base_url,
-                                    token,
-                                    "MOS100",
-                                    "Chg_SERN",
-                                    params,
-                                    env=env,
-                                )
-                                ok = int(response.get("status_code") or 0) < 400
-                                status_label = "OK" if ok else "NOK"
-                                error_message = None if ok else f"HTTP {response.get('status_code')}"
-                            except Exception as exc:  # noqa: BLE001
-                                ok = False
-                                status_label = "NOK"
-                                error_message = str(exc)
-                                response = {"error": error_message}
+                    if row_hard_failed:
+                        status_label = "SKIPPED"
                         _append_api_log(
                             "teilenummer_ips_mos100_chgsern",
                             params,
-                            response,
-                            ok,
-                            error_message,
+                            {"skipped": skip_after_error},
+                            True,
+                            None,
                             env=env_label,
                             wagon=wagon_ctx,
                             dry_run=dry_run,
@@ -3186,13 +5439,65 @@ def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
                             request_method="POST",
                             status=status_label,
                         )
-                        if ok or dry_run:
-                            break
-                        if MOS100_RETRY_MAX and attempt >= MOS100_RETRY_MAX:
-                            break
-                        if MOS100_RETRY_DELAY_SEC:
-                            time.sleep(MOS100_RETRY_DELAY_SEC)
-                        attempt += 1
+                    else:
+                        attempt = 1
+                        ok = False
+                        error_message = None
+                        response = {}
+                        status_label = "NOK"
+                        while True:
+                            if not mwno:
+                                ok = False
+                                status_label = "NOK"
+                                error_message = "MWNO fehlt"
+                                response = {"error": error_message}
+                            elif dry_run:
+                                ok = True
+                                status_label = "DRYRUN"
+                                error_message = None
+                                response = {"dry_run": True}
+                            else:
+                                try:
+                                    response = _call_ips_service(
+                                        base_url,
+                                        token,
+                                        "MOS100",
+                                        "Chg_SERN",
+                                        params,
+                                        env=env,
+                                    )
+                                    ok = int(response.get("status_code") or 0) < 400
+                                    status_label = "OK" if ok else "NOK"
+                                    error_message = None if ok else f"HTTP {response.get('status_code')}"
+                                except Exception as exc:  # noqa: BLE001
+                                    ok = False
+                                    status_label = "NOK"
+                                    error_message = str(exc)
+                                    response = {"error": error_message}
+                            _append_api_log(
+                                "teilenummer_ips_mos100_chgsern",
+                                params,
+                                response,
+                                ok,
+                                error_message,
+                                env=env_label,
+                                wagon=wagon_ctx,
+                                dry_run=dry_run,
+                                request_url=request_url,
+                                program="MOS100",
+                                transaction="Chg_SERN",
+                                request_method="POST",
+                                status=status_label,
+                            )
+                            if ok or dry_run:
+                                break
+                            if MOS100_RETRY_MAX and attempt >= MOS100_RETRY_MAX:
+                                break
+                            if MOS100_RETRY_DELAY_SEC:
+                                time.sleep(MOS100_RETRY_DELAY_SEC)
+                            attempt += 1
+                        if not ok and not dry_run:
+                            row_hard_failed = True
                     _update_teilenummer_row(
                         conn,
                         table_name,
@@ -3202,155 +5507,303 @@ def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
                     processed += 1
                     _update_job(job["id"], processed=processed)
 
-                    # MOS180MI Approve
+                    # MOS180MI Approve (mit Retry)
                     mos180_row = dict(row_map)
                     mos180_row["MWNO"] = mwno
-                    params = _build_mos180_params(mos180_row)
-                    request_url = _build_m3_request_url(base_url, "MOS180MI", "Approve", params)
-                    if not mwno:
-                        ok = False
-                        status_label = "ERROR"
-                        error_message = "MWNO fehlt"
-                        response = {"error": error_message}
-                    elif dry_run:
-                        ok = True
-                        status_label = "DRYRUN"
-                        error_message = None
-                        response = {"dry_run": True}
+                    if row_hard_failed:
+                        mos180_status = skip_after_error
+                        _append_api_log(
+                            "teilenummer_mos180_approve",
+                            {},
+                            {"skipped": skip_after_error},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
+                            program="MOS180MI",
+                            transaction="Approve",
+                            status="SKIPPED",
+                        )
+                        _update_teilenummer_row(
+                            conn,
+                            table_name,
+                            row["seq"],
+                            {"MOS180_STATUS": mos180_status},
+                        )
+                        processed += 1
+                        _update_job(job["id"], processed=processed)
                     else:
-                        try:
-                            response = call_m3_mi_get(base_url, token, "MOS180MI", "Approve", params)
-                            ok, status_label, error_message = _mi_status(response)
-                        except Exception as exc:  # noqa: BLE001
-                            ok = False
-                            status_label = "ERROR"
-                            error_message = str(exc)
-                            response = {"error": error_message}
-                    mos180_status = status_label if ok else f"{status_label}: {error_message}"
-                    _append_api_log(
-                        "teilenummer_mos180_approve",
-                        params,
-                        response,
-                        ok,
-                        error_message,
-                        env=env_label,
-                        wagon=wagon_ctx,
-                        dry_run=dry_run,
-                        request_url=request_url,
-                        program="MOS180MI",
-                        transaction="Approve",
-                    )
-                    _update_teilenummer_row(
-                        conn,
-                        table_name,
-                        row["seq"],
-                        {"MOS180_STATUS": mos180_status},
-                    )
-                    processed += 1
-                    _update_job(job["id"], processed=processed)
+                        attempt = 1
+                        while True:
+                            params = _build_mos180_params(mos180_row, env=env)
+                            request_url = _build_m3_request_url(base_url, "MOS180MI", "Approve", params)
+                            if not mwno:
+                                ok = False
+                                status_label = "ERROR"
+                                error_message = "MWNO fehlt"
+                                response = {"error": error_message}
+                            elif dry_run:
+                                ok = True
+                                status_label = "DRYRUN"
+                                error_message = None
+                                response = {"dry_run": True}
+                            else:
+                                try:
+                                    response = call_m3_mi_get(base_url, token, "MOS180MI", "Approve", params)
+                                    ok, status_label, error_message = _mi_status(response)
+                                except Exception as exc:  # noqa: BLE001
+                                    ok = False
+                                    status_label = "ERROR"
+                                    error_message = str(exc)
+                                    response = {"error": error_message}
+                            mos180_status = status_label if ok else f"{status_label}: {error_message}"
+                            _append_api_log(
+                                "teilenummer_mos180_approve",
+                                params,
+                                response,
+                                ok,
+                                error_message,
+                                env=env_label,
+                                wagon=wagon_ctx,
+                                dry_run=dry_run,
+                                request_url=request_url,
+                                program="MOS180MI",
+                                transaction="Approve",
+                            )
+                            _update_teilenummer_row(
+                                conn,
+                                table_name,
+                                row["seq"],
+                                {"MOS180_STATUS": mos180_status},
+                            )
+                            processed += 1
+                            _update_job(job["id"], processed=processed)
+                            if ok or dry_run or not mwno:
+                                break
+                            if MOS180_RETRY_MAX and attempt >= MOS180_RETRY_MAX:
+                                break
+                            total_steps += 1
+                            _update_job(job["id"], total=total_steps)
+                            _append_job_log(
+                                job["id"],
+                                f"MOS180MI Approve: Warte {MOS180_RETRY_DELAY_SEC} Sekunden auf ERP ...",
+                            )
+                            if MOS180_RETRY_DELAY_SEC:
+                                time.sleep(MOS180_RETRY_DELAY_SEC)
+                            attempt += 1
+                        if not ok and not dry_run:
+                            row_hard_failed = True
 
-                    # IPS MOS050 Montage
+                    # IPS MOS050 Montage (mit Retry)
                     mos050_row = dict(row_map)
                     mos050_row["MWNO"] = mwno
-                    params = _build_mos050_params(mos050_row)
-                    request_url = _build_ips_request_url(base_url, MOS050_SERVICE)
-                    if not mwno:
-                        ok = False
-                        status_label = "NOK"
-                        error_message = "MWNO fehlt"
-                        response = {"error": error_message}
-                    elif dry_run:
-                        ok = True
-                        status_label = "DRYRUN"
-                        error_message = None
-                        response = {"dry_run": True}
+                    if row_is_leading:
+                        mos050_status = "SKIPPED: führendes Objekt (kein Montage-Schritt)"
+                        _append_api_log(
+                            "teilenummer_ips_mos50_montage",
+                            {},
+                            {"skipped": mos050_status},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
+                            program=MOS050_SERVICE or "MOS050",
+                            transaction=MOS050_OPERATION or "Montage",
+                            request_method="POST",
+                            status="SKIPPED",
+                        )
+                        _update_teilenummer_row(
+                            conn,
+                            table_name,
+                            row["seq"],
+                            {"MOS050_STATUS": mos050_status},
+                        )
+                        processed += 1
+                        _update_job(job["id"], processed=processed)
+                    elif row_hard_failed:
+                        mos050_status = skip_after_error
+                        _append_api_log(
+                            "teilenummer_ips_mos50_montage",
+                            {},
+                            {"skipped": skip_after_error},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
+                            program=MOS050_SERVICE or "MOS050",
+                            transaction=MOS050_OPERATION or "Montage",
+                            request_method="POST",
+                            status="SKIPPED",
+                        )
+                        _update_teilenummer_row(
+                            conn,
+                            table_name,
+                            row["seq"],
+                            {"MOS050_STATUS": mos050_status},
+                        )
+                        processed += 1
+                        _update_job(job["id"], processed=processed)
                     else:
-                        try:
-                            response = _call_ips_service(
-                                base_url,
-                                token,
-                                MOS050_SERVICE,
-                                MOS050_OPERATION,
+                        attempt = 1
+                        while True:
+                            params = _build_mos050_params(mos050_row)
+                            request_url = _build_ips_request_url(base_url, MOS050_SERVICE)
+                            if not mwno:
+                                ok = False
+                                status_label = "NOK"
+                                error_message = "MWNO fehlt"
+                                response = {"error": error_message}
+                            elif dry_run:
+                                ok = True
+                                status_label = "DRYRUN"
+                                error_message = None
+                                response = {"dry_run": True}
+                            else:
+                                try:
+                                    response = _call_ips_service(
+                                        base_url,
+                                        token,
+                                        MOS050_SERVICE,
+                                        MOS050_OPERATION,
+                                        params,
+                                        namespace_override=MOS050_NAMESPACE or None,
+                                        body_tag_override=MOS050_BODY_TAG or None,
+                                        env=env,
+                                    )
+                                    ok = int(response.get("status_code") or 0) < 400
+                                    status_label = "OK" if ok else "NOK"
+                                    error_message = None if ok else f"HTTP {response.get('status_code')}"
+                                except Exception as exc:  # noqa: BLE001
+                                    ok = False
+                                    status_label = "NOK"
+                                    error_message = str(exc)
+                                    response = {"error": error_message}
+                            _append_api_log(
+                                "teilenummer_ips_mos50_montage",
                                 params,
-                                namespace_override=MOS050_NAMESPACE or None,
-                                body_tag_override=MOS050_BODY_TAG or None,
-                                env=env,
+                                response,
+                                ok,
+                                error_message,
+                                env=env_label,
+                                wagon=wagon_ctx,
+                                dry_run=dry_run,
+                                request_url=request_url,
+                                program=MOS050_SERVICE or "MOS050",
+                                transaction=MOS050_OPERATION or "Montage",
+                                request_method="POST",
+                                status=status_label,
                             )
-                            ok = int(response.get("status_code") or 0) < 400
-                            status_label = "OK" if ok else "NOK"
-                            error_message = None if ok else f"HTTP {response.get('status_code')}"
-                        except Exception as exc:  # noqa: BLE001
-                            ok = False
-                            status_label = "NOK"
-                            error_message = str(exc)
-                            response = {"error": error_message}
-                    _append_api_log(
-                        "teilenummer_ips_mos50_montage",
-                        params,
-                        response,
-                        ok,
-                        error_message,
-                        env=env_label,
-                        wagon=wagon_ctx,
-                        dry_run=dry_run,
-                        request_url=request_url,
-                        program=MOS050_SERVICE or "MOS050",
-                        transaction=MOS050_OPERATION or "Montage",
-                        request_method="POST",
-                        status=status_label,
-                    )
-                    _update_teilenummer_row(
-                        conn,
-                        table_name,
-                        row["seq"],
-                        {"MOS050_STATUS": status_label},
-                    )
-                    processed += 1
-                    _update_job(job["id"], processed=processed)
+                            _update_teilenummer_row(
+                                conn,
+                                table_name,
+                                row["seq"],
+                                {"MOS050_STATUS": status_label},
+                            )
+                            processed += 1
+                            _update_job(job["id"], processed=processed)
+                            if ok or dry_run or not mwno:
+                                break
+                            if MOS050_RETRY_MAX and attempt >= MOS050_RETRY_MAX:
+                                break
+                            total_steps += 1
+                            _update_job(job["id"], total=total_steps)
+                            _append_job_log(
+                                job["id"],
+                                f"IPS MOS050: Warte {MOS050_RETRY_DELAY_SEC} Sekunden auf ERP ...",
+                            )
+                            if MOS050_RETRY_DELAY_SEC:
+                                time.sleep(MOS050_RETRY_DELAY_SEC)
+                            attempt += 1
+                        if not ok and not dry_run:
+                            row_hard_failed = True
 
                     # MOS125MI Einbau
-                    params = _build_mos125_params(row_map, mode="in")
-                    request_url = _build_m3_request_url(base_url, "MOS125MI", "RemoveInstall", params)
-                    if not params.get("TRDT"):
-                        ok = False
-                        status_label = "ERROR"
-                        error_message = "UMBAU_DATUM fehlt"
-                        response = {"error": error_message}
-                    elif dry_run:
-                        ok = True
-                        status_label = "DRYRUN"
-                        error_message = None
-                        response = {"dry_run": True}
+                    if row_is_leading:
+                        in_status = "SKIPPED: führendes Objekt (kein Einbau)"
+                        _append_api_log(
+                            "teilenummer_einbau",
+                            {},
+                            {"skipped": in_status},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
+                            program="MOS125MI",
+                            transaction="RemoveInstall",
+                            status="SKIPPED",
+                        )
+                    elif row_hard_failed:
+                        in_status = skip_after_error
+                        _append_api_log(
+                            "teilenummer_einbau",
+                            {},
+                            {"skipped": skip_after_error},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
+                            program="MOS125MI",
+                            transaction="RemoveInstall",
+                            status="SKIPPED",
+                        )
                     else:
-                        try:
-                            response = call_m3_mi_get(base_url, token, "MOS125MI", "RemoveInstall", params)
-                            ok, status_label, error_message = _mi_status(response)
-                        except Exception as exc:  # noqa: BLE001
+                        params = _build_mos125_params(row_map, mode="in", env=env)
+                        request_url = _build_m3_request_url(base_url, "MOS125MI", "RemoveInstall", params)
+                        if not params.get("TRDT"):
                             ok = False
                             status_label = "ERROR"
-                            error_message = str(exc)
+                            error_message = "UMBAU_DATUM fehlt"
                             response = {"error": error_message}
-                    in_status = status_label if ok else f"{status_label}: {error_message}"
-                    _append_api_log(
-                        "teilenummer_einbau",
-                        params,
-                        response,
-                        ok,
-                        error_message,
-                        env=env_label,
-                        wagon=wagon_ctx,
-                        dry_run=dry_run,
-                        request_url=request_url,
-                        program="MOS125MI",
-                        transaction="RemoveInstall",
-                    )
+                        elif dry_run:
+                            ok = True
+                            status_label = "DRYRUN"
+                            error_message = None
+                            response = {"dry_run": True}
+                        else:
+                            try:
+                                response = call_m3_mi_get(base_url, token, "MOS125MI", "RemoveInstall", params)
+                                ok, status_label, error_message = _mi_status(response)
+                            except Exception as exc:  # noqa: BLE001
+                                ok = False
+                                status_label = "ERROR"
+                                error_message = str(exc)
+                                response = {"error": error_message}
+                        in_status = status_label if ok else f"{status_label}: {error_message}"
+                        _append_api_log(
+                            "teilenummer_einbau",
+                            params,
+                            response,
+                            ok,
+                            error_message,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url=request_url,
+                            program="MOS125MI",
+                            transaction="RemoveInstall",
+                        )
                     _update_teilenummer_row(conn, table_name, row["seq"], {"IN_STATUS": in_status})
                     processed += 1
                     _update_job(job["id"], processed=processed)
 
+                    row_result = "OK"
+                    if row_hard_failed:
+                        row_result = "FEHLER"
+                    elif row_is_leading:
+                        row_result = "OK_FUEHRENDES_OBJEKT"
                     _append_job_log(
                         job["id"],
-                        f"{index}/{len(rows)} abgeschlossen: {old_itno} {old_sern} -> {new_itno} {new_sern}",
+                        f"{index}/{len(rows)} abgeschlossen [{row_result}]: {old_itno} {old_sern} -> {new_itno} {new_sern}",
                     )
 
             with _connect() as conn:
@@ -3371,7 +5824,13 @@ def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
             _finish_job(job["id"], "error", error=str(exc))
 
     threading.Thread(target=_worker, daemon=True).start()
-    return {"job_id": job["id"], "status": job["status"], "env": job["env"]}
+    return {
+        "job_id": job["id"],
+        "status": job["status"],
+        "env": normalized_env,
+        "dry_run": run_dry_run,
+        "mode": "DRYRUN" if run_dry_run else "LIVE",
+    }
 
 
 @app.get("/api/objstrk")
@@ -3805,7 +6264,7 @@ def _run_rollback_job(job: dict, env: str) -> None:
         env_label = _normalize_env(env).upper()
         with _connect() as conn:
             for idx, row in enumerate(target_rows, start=1):
-                params = _build_mos125_params(row, mode="in")
+                params = _build_mos125_params(row, mode="in", env=env)
                 log_params = {
                     "ITNO": params.get("ITNI", ""),
                     "SERN": params.get("BANI", ""),
@@ -4300,7 +6759,7 @@ def renumber_run(env: str = Query(DEFAULT_ENV)) -> dict:
             env_label = _normalize_env(env).upper()
             with _connect() as conn:
                 for idx, row in enumerate(rows, start=1):
-                    params = _build_mos125_params(row, mode="out")
+                    params = _build_mos125_params(row, mode="out", env=env)
                     wagon_ctx = _wagon_log_context(row)
                     request_url = _build_m3_request_url(base_url, "MOS125MI", "RemoveInstall", params)
                     if not params["TRDT"]:
@@ -4463,7 +6922,7 @@ def renumber_mos170(env: str = Query(DEFAULT_ENV)) -> dict:
                 next_pending = []
                 with _connect() as conn:
                     for row in pending_rows:
-                        params = _build_mos170_params(row)
+                        params = _build_mos170_params(row, env=env)
                         request_url = _build_m3_request_url(base_url, "MOS170MI", "AddProp", params)
                         required_missing = not params.get("ITNO") or not params.get("BANO") or not params.get("STDT")
                         if required_missing:
@@ -4608,7 +7067,7 @@ def renumber_cms100(env: str = Query(DEFAULT_ENV)) -> dict:
                 with _connect() as conn:
                     for row in cms_rows:
                         plpn = _row_value(row, "PLPN")
-                        params = _build_cms100_params(plpn)
+                        params = _build_cms100_params(plpn, env=env)
                         request_url = _build_m3_request_url(base_url, "CMS100MI", "Lst_PLPN_MWNO", params)
                         if not plpn:
                             ok = False
@@ -4914,7 +7373,7 @@ def renumber_wagon(env: str = Query(DEFAULT_ENV)) -> dict:
             else:
                 # MOS170 AddProp
                 plpn = ""
-                params = _build_mos170_wagon_params(old_itno, old_sern, umbau_datum, whlo)
+                params = _build_mos170_wagon_params(old_itno, old_sern, umbau_datum, whlo, env=env)
                 request_url = _build_m3_request_url(base_url, "MOS170MI", "AddProp", params)
                 if not params.get("ITNO") or not params.get("BANO") or not params.get("STDT"):
                     ok = False
@@ -4987,7 +7446,7 @@ def renumber_wagon(env: str = Query(DEFAULT_ENV)) -> dict:
                 while True:
                     if WAGON_CMS100_RETRY_MAX and attempt > WAGON_CMS100_RETRY_MAX:
                         break
-                    params = _build_cms100_params(plpn)
+                    params = _build_cms100_params(plpn, env=env)
                     request_url = _build_m3_request_url(base_url, "CMS100MI", "Lst_PLPN_MWNO", params)
                     if dry_run:
                         ok = True
@@ -5248,7 +7707,7 @@ def renumber_install(env: str = Query(DEFAULT_ENV)) -> dict:
             env_label = _normalize_env(env).upper()
             with _connect() as conn:
                 for idx, row in enumerate(rows, start=1):
-                    params = _build_mos125_params(row, mode="in")
+                    params = _build_mos125_params(row, mode="in", env=env)
                     wagon_ctx = _wagon_log_context(row)
                     request_url = _build_m3_request_url(base_url, "MOS125MI", "RemoveInstall", params)
                     if not params["TRDT"]:
@@ -5415,7 +7874,7 @@ def renumber_mos180(env: str = Query(DEFAULT_ENV)) -> dict:
             error_count = 0
             for idx, (mwno, entry) in enumerate(mwno_map.items(), start=1):
                 row = entry["row"]
-                params = _build_mos180_params(row)
+                params = _build_mos180_params(row, env=env)
                 request_url = _build_m3_request_url(base_url, "MOS180MI", "Approve", params)
                 mwno = params.get("MWNO") or mwno
                 if not mwno:
@@ -6758,6 +9217,8 @@ def rsrd2_overview(
     halter: str | None = Query(None),
     uic: str | None = Query(None),
     status: str | None = Query(None),
+    diff_count: str | None = Query(None),
+    docs: str | None = Query(None),
 ) -> dict:
     rsrd_env_norm = _normalize_rsrd_env(rsrd_env, env)
     erp_table = _table_for(RSRD_ERP_FULL_TABLE, env)
@@ -6784,7 +9245,9 @@ def rsrd2_overview(
             raise HTTPException(status_code=404, detail=f"Tabelle {erp_table} nicht gefunden.")
         _ensure_rsrd_sync_table(conn, env)
         _ensure_rsrd_sync_selection_table(conn, env)
+        _ensure_rsrd_document_tables(conn)
         tables = _ensure_rsrd_tables(conn, rsrd_env_norm)
+        upload_table = _ensure_rsrd_upload_table(conn, rsrd_env_norm)
         numbers_exists = _table_exists(conn, numbers_table)
         join_numbers = ""
         wagen_typ_expr = "e.WAGEN_TYP"
@@ -6807,13 +9270,88 @@ def rsrd2_overview(
                 filters.append("r.wagon_id IS NOT NULL")
             elif status_norm in {"red", "missing"}:
                 filters.append("r.wagon_id IS NULL")
+        diff_count_expr = (
+            "CAST((LENGTH(u.diff_json) - LENGTH(REPLACE(u.diff_json, '\"equal\": false', ''))) "
+            "/ LENGTH('\"equal\": false') AS INTEGER)"
+        )
+        docs_norm = str(docs or "").strip().lower()
+        if docs_norm in {"yes", "ja", "j", "y", "1", "true"}:
+            filters.append(
+                f"""
+                EXISTS (
+                    SELECT 1
+                    FROM {RSRD_DOCUMENT_ASSIGNMENTS_TABLE} a
+                    WHERE (
+                        a.assign_type = 'baureihe'
+                        AND UPPER(TRIM(a.assign_value)) = UPPER(TRIM(e.WG_BAUREIHE))
+                    ) OR (
+                        a.assign_type = 'wagen_typ'
+                        AND UPPER(TRIM(a.assign_value)) = UPPER(TRIM({wagen_typ_expr}))
+                    )
+                )
+                """
+            )
+        elif docs_norm in {"no", "nein", "n", "0", "false"}:
+            filters.append(
+                f"""
+                NOT EXISTS (
+                    SELECT 1
+                    FROM {RSRD_DOCUMENT_ASSIGNMENTS_TABLE} a
+                    WHERE (
+                        a.assign_type = 'baureihe'
+                        AND UPPER(TRIM(a.assign_value)) = UPPER(TRIM(e.WG_BAUREIHE))
+                    ) OR (
+                        a.assign_type = 'wagen_typ'
+                        AND UPPER(TRIM(a.assign_value)) = UPPER(TRIM({wagen_typ_expr}))
+                    )
+                )
+                """
+            )
+
+        base_filters = list(filters)
+        base_params = list(params)
+        diff_count_norm = str(diff_count or "").strip()
+        if diff_count_norm:
+            try:
+                diff_count_value = int(diff_count_norm)
+            except ValueError:
+                diff_count_value = None
+            if diff_count_value is not None and diff_count_value >= 0:
+                filters.append(f"u.diff_json IS NOT NULL AND {diff_count_expr} = ?")
+                params.append(diff_count_value)
 
         where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+        base_where_clause = f"WHERE {' AND '.join(base_filters)}" if base_filters else ""
+        diff_count_rows = conn.execute(
+            f"""
+            SELECT diff_count, COUNT(*) AS item_count
+            FROM (
+                SELECT
+                    CASE
+                        WHEN u.diff_json IS NULL OR TRIM(u.diff_json) = '' THEN NULL
+                        ELSE {diff_count_expr}
+                    END AS diff_count
+                FROM {erp_table} e
+                {join_numbers}
+                LEFT JOIN {upload_table} u
+                  ON u.wagon_number_freight = CAST(e.WAGEN_SERIENNUMMER AS TEXT)
+                LEFT JOIN {tables.detail} r
+                  ON r.wagon_number_freight = REPLACE(REPLACE(CAST(e.WAGEN_SERIENNUMMER AS TEXT), ' ', ''), '-', '')
+                {base_where_clause}
+            ) x
+            WHERE diff_count IS NOT NULL
+            GROUP BY diff_count
+            ORDER BY diff_count
+            """,
+            base_params,
+        ).fetchall()
         total = conn.execute(
             f"""
             SELECT COUNT(*)
             FROM {erp_table} e
             {join_numbers}
+            LEFT JOIN {upload_table} u
+              ON u.wagon_number_freight = CAST(e.WAGEN_SERIENNUMMER AS TEXT)
             LEFT JOIN {tables.detail} r
               ON r.wagon_number_freight = REPLACE(REPLACE(CAST(e.WAGEN_SERIENNUMMER AS TEXT), ' ', ''), '-', '')
             {where_clause}
@@ -6833,12 +9371,20 @@ def rsrd2_overview(
                 sel.sync_docs_env AS sync_docs_env,
                 sel.one_time_transfer AS one_time_transfer,
                 sel.updated_at AS sync_updated_at,
-                r.wagon_id AS rsrd_wagon_id
+                r.wagon_id AS rsrd_wagon_id,
+                CASE
+                    WHEN u.diff_json IS NULL OR TRIM(u.diff_json) = '' THEN NULL
+                    ELSE {diff_count_expr}
+                END AS compare_diff_count,
+                u.diff_json AS compare_diff_json,
+                u.updated_at AS compare_updated_at
             FROM {erp_table} e
             LEFT JOIN {sync_table} s
               ON s.wagon_number_freight = CAST(e.WAGEN_SERIENNUMMER AS TEXT)
             LEFT JOIN {selection_table} sel
               ON sel.wagon_number_freight = CAST(e.WAGEN_SERIENNUMMER AS TEXT)
+            LEFT JOIN {upload_table} u
+              ON u.wagon_number_freight = CAST(e.WAGEN_SERIENNUMMER AS TEXT)
             {join_numbers}
             LEFT JOIN {tables.detail} r
               ON r.wagon_number_freight = REPLACE(REPLACE(CAST(e.WAGEN_SERIENNUMMER AS TEXT), ' ', ''), '-', '')
@@ -6848,20 +9394,300 @@ def rsrd2_overview(
             """,
             params + [limit, offset],
         ).fetchall()
+        doc_map = _load_matching_documents(conn, rows)
+
     out_rows = []
     for row in rows:
         item = dict(row)
         item["rsrd_present"] = bool(item.get("rsrd_wagon_id"))
+        wagon = str(item.get("wagon_number") or "").strip()
+        docs = doc_map.get(wagon, [])
+        item["sync_docs_flag"] = "J" if docs else "N"
+        item["sync_docs_items"] = docs
+        item["sync_docs_text"] = ", ".join(docs)
+        diff_count = item.get("compare_diff_count")
+        if diff_count is not None:
+            try:
+                diff_count = int(diff_count)
+            except Exception:
+                diff_count = None
+        raw_diff = item.get("compare_diff_json")
+        if diff_count is None and raw_diff:
+            try:
+                parsed_diffs = json.loads(raw_diff)
+                if isinstance(parsed_diffs, list):
+                    diff_count = sum(
+                        1
+                        for diff in parsed_diffs
+                        if not (isinstance(diff, dict) and diff.get("equal"))
+                    )
+            except Exception:
+                diff_count = None
+        item.pop("compare_diff_count", None)
+        item.pop("compare_diff_json", None)
+        item.pop("compare_updated_at", None)
+        item["diff_count"] = diff_count
         out_rows.append(item)
+
+    diff_count_options = []
+    for entry in diff_count_rows:
+        try:
+            value = int(entry["diff_count"])
+            count = int(entry["item_count"])
+        except Exception:
+            continue
+        if value < 0:
+            continue
+        diff_count_options.append({"value": value, "count": count})
 
     return {
         "rows": out_rows,
         "limit": limit,
         "offset": offset,
         "total": total,
+        "diff_count_options": diff_count_options,
         "erp_env": _normalize_env(env),
         "rsrd_env": rsrd_env_norm,
     }
+
+
+@app.get("/api/rsrd2/documents")
+def rsrd2_documents(env: str = Query(DEFAULT_ENV)) -> dict:
+    erp_table = _table_for(RSRD_ERP_FULL_TABLE, env)
+    with _connect() as conn:
+        _ensure_rsrd_document_tables(conn)
+        docs_rows = conn.execute(
+            f"""
+            SELECT
+                id,
+                display_name,
+                original_name,
+                mime_type,
+                size_bytes,
+                uploaded_at,
+                updated_at
+            FROM {RSRD_DOCUMENTS_TABLE}
+            ORDER BY uploaded_at DESC, id DESC
+            """
+        ).fetchall()
+        assign_rows = conn.execute(
+            f"""
+            SELECT document_id, assign_type, assign_value
+            FROM {RSRD_DOCUMENT_ASSIGNMENTS_TABLE}
+            ORDER BY assign_type, assign_value
+            """
+        ).fetchall()
+        by_doc: Dict[int, Dict[str, List[str]]] = {}
+        for row in assign_rows:
+            doc_id = int(row["document_id"])
+            if doc_id not in by_doc:
+                by_doc[doc_id] = {"baureihen": [], "wagen_typen": []}
+            target = "baureihen" if row["assign_type"] == "baureihe" else "wagen_typen"
+            value = str(row["assign_value"] or "").strip()
+            if value and value not in by_doc[doc_id][target]:
+                by_doc[doc_id][target].append(value)
+
+        baureihe_options: List[str] = []
+        wagen_typ_options: List[str] = []
+        if _table_exists(conn, erp_table):
+            baureihe_rows = conn.execute(
+                f"""
+                SELECT DISTINCT WG_BAUREIHE AS value
+                FROM {erp_table}
+                WHERE WG_BAUREIHE IS NOT NULL AND TRIM(WG_BAUREIHE) <> ''
+                ORDER BY WG_BAUREIHE
+                LIMIT 2000
+                """
+            ).fetchall()
+            wagen_typ_rows = conn.execute(
+                f"""
+                SELECT DISTINCT WAGEN_TYP AS value
+                FROM {erp_table}
+                WHERE WAGEN_TYP IS NOT NULL AND TRIM(WAGEN_TYP) <> ''
+                ORDER BY WAGEN_TYP
+                LIMIT 2000
+                """
+            ).fetchall()
+            baureihe_options = [str(row["value"]) for row in baureihe_rows]
+            wagen_typ_options = [str(row["value"]) for row in wagen_typ_rows]
+
+    documents = []
+    for row in docs_rows:
+        doc_id = int(row["id"])
+        assigns = by_doc.get(doc_id, {"baureihen": [], "wagen_typen": []})
+        documents.append(
+            {
+                "id": doc_id,
+                "display_name": row["display_name"],
+                "original_name": row["original_name"],
+                "mime_type": row["mime_type"],
+                "size_bytes": row["size_bytes"],
+                "uploaded_at": row["uploaded_at"],
+                "updated_at": row["updated_at"],
+                "baureihen": assigns["baureihen"],
+                "wagen_typen": assigns["wagen_typen"],
+                "download_url": f"/api/rsrd2/documents/{doc_id}/download",
+            }
+        )
+    return {
+        "documents": documents,
+        "baureihe_options": baureihe_options,
+        "wagen_typ_options": wagen_typ_options,
+        "env": _normalize_env(env),
+    }
+
+
+@app.post("/api/rsrd2/documents/upload")
+async def rsrd2_documents_upload(
+    request: Request,
+    name: str | None = Query(None),
+) -> dict:
+    raw = await request.body()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Dateiinhalt fehlt.")
+    header_name = str(request.headers.get("x-file-name") or "").strip()
+    provided_name = str(name or "").strip()
+    decoded_name = unquote(provided_name or header_name or "dokument")
+    original_name = Path(decoded_name).name or "dokument"
+    safe_name = re.sub(r"[^0-9A-Za-z._-]+", "_", original_name).strip("._")
+    if not safe_name:
+        safe_name = "dokument"
+    stored_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex}_{safe_name}"
+    content_type = str(request.headers.get("content-type") or "").split(";", 1)[0].strip()
+    mime_type = content_type or mimetypes.guess_type(original_name)[0] or "application/octet-stream"
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    target = _rsrd_documents_dir() / stored_name
+    target.write_bytes(raw)
+
+    with _connect() as conn:
+        _ensure_rsrd_document_tables(conn)
+        cursor = conn.execute(
+            f"""
+            INSERT INTO {RSRD_DOCUMENTS_TABLE} (
+                display_name,
+                original_name,
+                stored_name,
+                mime_type,
+                size_bytes,
+                uploaded_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (original_name, original_name, stored_name, mime_type, len(raw), now, now),
+        )
+        doc_id = int(cursor.lastrowid)
+        conn.commit()
+    return {
+        "id": doc_id,
+        "display_name": original_name,
+        "original_name": original_name,
+        "mime_type": mime_type,
+        "size_bytes": len(raw),
+        "uploaded_at": now,
+    }
+
+
+@app.post("/api/rsrd2/documents/{doc_id}/assignments")
+def rsrd2_documents_assignments(
+    doc_id: int,
+    payload: dict = Body(...),
+) -> dict:
+    baureihen = _normalize_doc_assign_values(payload.get("baureihen"))
+    wagen_typen = _normalize_doc_assign_values(payload.get("wagen_typen"))
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    with _connect() as conn:
+        _ensure_rsrd_document_tables(conn)
+        exists = conn.execute(
+            f"SELECT id FROM {RSRD_DOCUMENTS_TABLE} WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="Dokument nicht gefunden.")
+        conn.execute(
+            f"DELETE FROM {RSRD_DOCUMENT_ASSIGNMENTS_TABLE} WHERE document_id = ?",
+            (doc_id,),
+        )
+        for value in baureihen:
+            conn.execute(
+                f"""
+                INSERT INTO {RSRD_DOCUMENT_ASSIGNMENTS_TABLE} (
+                    document_id, assign_type, assign_value, created_at
+                ) VALUES (?, 'baureihe', ?, ?)
+                """,
+                (doc_id, value, now),
+            )
+        for value in wagen_typen:
+            conn.execute(
+                f"""
+                INSERT INTO {RSRD_DOCUMENT_ASSIGNMENTS_TABLE} (
+                    document_id, assign_type, assign_value, created_at
+                ) VALUES (?, 'wagen_typ', ?, ?)
+                """,
+                (doc_id, value, now),
+            )
+        conn.execute(
+            f"UPDATE {RSRD_DOCUMENTS_TABLE} SET updated_at = ? WHERE id = ?",
+            (now, doc_id),
+        )
+        conn.commit()
+    return {
+        "id": doc_id,
+        "baureihen": baureihen,
+        "wagen_typen": wagen_typen,
+        "updated_at": now,
+    }
+
+
+@app.get("/api/rsrd2/documents/{doc_id}/download")
+def rsrd2_documents_download(doc_id: int) -> FileResponse:
+    with _connect() as conn:
+        _ensure_rsrd_document_tables(conn)
+        row = conn.execute(
+            f"""
+            SELECT original_name, stored_name, mime_type
+            FROM {RSRD_DOCUMENTS_TABLE}
+            WHERE id = ?
+            """,
+            (doc_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Dokument nicht gefunden.")
+    path = _rsrd_documents_dir() / str(row["stored_name"])
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Datei nicht gefunden: {path}")
+    return FileResponse(
+        path,
+        media_type=str(row["mime_type"] or "application/octet-stream"),
+        filename=str(row["original_name"] or path.name),
+    )
+
+
+@app.delete("/api/rsrd2/documents/{doc_id}")
+def rsrd2_documents_delete(doc_id: int) -> dict:
+    with _connect() as conn:
+        _ensure_rsrd_document_tables(conn)
+        row = conn.execute(
+            f"SELECT stored_name FROM {RSRD_DOCUMENTS_TABLE} WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Dokument nicht gefunden.")
+        conn.execute(
+            f"DELETE FROM {RSRD_DOCUMENT_ASSIGNMENTS_TABLE} WHERE document_id = ?",
+            (doc_id,),
+        )
+        conn.execute(
+            f"DELETE FROM {RSRD_DOCUMENTS_TABLE} WHERE id = ?",
+            (doc_id,),
+        )
+        conn.commit()
+    file_path = _rsrd_documents_dir() / str(row["stored_name"])
+    if file_path.exists():
+        try:
+            file_path.unlink()
+        except OSError:
+            pass
+    return {"deleted": doc_id}
 
 
 @app.post("/api/rsrd2/sync_flag")
@@ -6908,7 +9734,9 @@ def rsrd2_sync_env(
     column = column_map.get(kind)
     if not column:
         raise HTTPException(status_code=400, detail="Ungültiger Sync-Typ.")
-    if value not in {"N", "T", "P"}:
+    if value in {"J", "T", "P"}:
+        value = "J"
+    else:
         value = "N"
     table_name = _table_for(RSRD_SYNC_SELECTION_TABLE, env)
     timestamp = datetime.utcnow().isoformat(timespec="seconds")
@@ -6946,7 +9774,9 @@ def rsrd2_sync_env_bulk(
     column = column_map.get(kind)
     if not column:
         raise HTTPException(status_code=400, detail="Ungültiger Sync-Typ.")
-    if value not in {"N", "T", "P"}:
+    if value in {"J", "T", "P"}:
+        value = "J"
+    else:
         value = "N"
 
     sern = str(filters.get("sern") or "").strip()
@@ -6954,6 +9784,7 @@ def rsrd2_sync_env_bulk(
     halter = str(filters.get("halter") or "").strip()
     uic = str(filters.get("uic") or "").strip()
     status = str(filters.get("status") or "").strip().lower()
+    docs = str(filters.get("docs") or "").strip().lower()
 
     where = []
     params: List[Any] = []
@@ -6983,13 +9814,16 @@ def rsrd2_sync_env_bulk(
             raise HTTPException(status_code=404, detail=f"Tabelle {erp_table} nicht gefunden.")
         tables = _ensure_rsrd_tables(conn, rsrd_env_norm)
         _ensure_rsrd_sync_selection_table(conn, env)
+        _ensure_rsrd_document_tables(conn)
         numbers_exists = _table_exists(conn, numbers_table)
         join_numbers = ""
+        wagen_typ_expr = "e.WAGEN_TYP"
         if numbers_exists:
             join_numbers = (
                 f"LEFT JOIN {numbers_table} n "
                 "ON n.wagon_sern_numeric = CAST(e.WAGEN_SERIENNUMMER AS TEXT)"
             )
+            wagen_typ_expr = "COALESCE(e.WAGEN_TYP, n.wagon_typ)"
 
         if uic:
             if numbers_exists:
@@ -6997,6 +9831,38 @@ def rsrd2_sync_env_bulk(
             else:
                 where.append("e.WAGEN_TYP LIKE ? ESCAPE '\\'")
             params.append(_like_pattern(uic))
+        if docs in {"yes", "ja", "j", "y", "1", "true"}:
+            where.append(
+                f"""
+                EXISTS (
+                    SELECT 1
+                    FROM {RSRD_DOCUMENT_ASSIGNMENTS_TABLE} a
+                    WHERE (
+                        a.assign_type = 'baureihe'
+                        AND UPPER(TRIM(a.assign_value)) = UPPER(TRIM(e.WG_BAUREIHE))
+                    ) OR (
+                        a.assign_type = 'wagen_typ'
+                        AND UPPER(TRIM(a.assign_value)) = UPPER(TRIM({wagen_typ_expr}))
+                    )
+                )
+                """
+            )
+        elif docs in {"no", "nein", "n", "0", "false"}:
+            where.append(
+                f"""
+                NOT EXISTS (
+                    SELECT 1
+                    FROM {RSRD_DOCUMENT_ASSIGNMENTS_TABLE} a
+                    WHERE (
+                        a.assign_type = 'baureihe'
+                        AND UPPER(TRIM(a.assign_value)) = UPPER(TRIM(e.WG_BAUREIHE))
+                    ) OR (
+                        a.assign_type = 'wagen_typ'
+                        AND UPPER(TRIM(a.assign_value)) = UPPER(TRIM({wagen_typ_expr}))
+                    )
+                )
+                """
+            )
 
         where_clause = f"WHERE {' AND '.join(where)}" if where else ""
         total = conn.execute(
@@ -7080,6 +9946,7 @@ def rsrd2_one_time_transfer_bulk(
     halter = str(filters.get("halter") or "").strip()
     uic = str(filters.get("uic") or "").strip()
     status = str(filters.get("status") or "").strip().lower()
+    docs = str(filters.get("docs") or "").strip().lower()
 
     where = []
     params: List[Any] = []
@@ -7109,13 +9976,16 @@ def rsrd2_one_time_transfer_bulk(
             raise HTTPException(status_code=404, detail=f"Tabelle {erp_table} nicht gefunden.")
         tables = _ensure_rsrd_tables(conn, rsrd_env_norm)
         _ensure_rsrd_sync_selection_table(conn, env)
+        _ensure_rsrd_document_tables(conn)
         numbers_exists = _table_exists(conn, numbers_table)
         join_numbers = ""
+        wagen_typ_expr = "e.WAGEN_TYP"
         if numbers_exists:
             join_numbers = (
                 f"LEFT JOIN {numbers_table} n "
                 "ON n.wagon_sern_numeric = CAST(e.WAGEN_SERIENNUMMER AS TEXT)"
             )
+            wagen_typ_expr = "COALESCE(e.WAGEN_TYP, n.wagon_typ)"
 
         if uic:
             if numbers_exists:
@@ -7123,6 +9993,38 @@ def rsrd2_one_time_transfer_bulk(
             else:
                 where.append("e.WAGEN_TYP LIKE ? ESCAPE '\\'")
             params.append(_like_pattern(uic))
+        if docs in {"yes", "ja", "j", "y", "1", "true"}:
+            where.append(
+                f"""
+                EXISTS (
+                    SELECT 1
+                    FROM {RSRD_DOCUMENT_ASSIGNMENTS_TABLE} a
+                    WHERE (
+                        a.assign_type = 'baureihe'
+                        AND UPPER(TRIM(a.assign_value)) = UPPER(TRIM(e.WG_BAUREIHE))
+                    ) OR (
+                        a.assign_type = 'wagen_typ'
+                        AND UPPER(TRIM(a.assign_value)) = UPPER(TRIM({wagen_typ_expr}))
+                    )
+                )
+                """
+            )
+        elif docs in {"no", "nein", "n", "0", "false"}:
+            where.append(
+                f"""
+                NOT EXISTS (
+                    SELECT 1
+                    FROM {RSRD_DOCUMENT_ASSIGNMENTS_TABLE} a
+                    WHERE (
+                        a.assign_type = 'baureihe'
+                        AND UPPER(TRIM(a.assign_value)) = UPPER(TRIM(e.WG_BAUREIHE))
+                    ) OR (
+                        a.assign_type = 'wagen_typ'
+                        AND UPPER(TRIM(a.assign_value)) = UPPER(TRIM({wagen_typ_expr}))
+                    )
+                )
+                """
+            )
 
         where_clause = f"WHERE {' AND '.join(where)}" if where else ""
 
@@ -7196,6 +10098,8 @@ def rsrd2_compare(
     offset: int = Query(0, ge=0),
     create_upload: bool = Query(True),
     include_all: bool = Query(False),
+    save_compare: bool = Query(False),
+    use_live_erp_text: bool = Query(False),
     env: str = Query(DEFAULT_ENV),
     rsrd_env: str | None = Query(None),
     payload: dict | None = Body(default=None),
@@ -7270,7 +10174,9 @@ def rsrd2_compare(
                     payload = {}
                 if isinstance(payload, dict):
                     meta = payload.get("RSRD2MetaData") or {}
-            if wagons and len(wagons) <= 5:
+            # Default comparison must be DB-vs-RSRD only.
+            # Optional live enrichment can be enabled explicitly for diagnostics.
+            if use_live_erp_text and wagons and len(wagons) <= 5:
                 try:
                     long_text = _fetch_wg_tsi_text(erp_row.get("WAGEN_SERIENNUMMER"), env)
                 except HTTPException:
@@ -7284,6 +10190,37 @@ def rsrd2_compare(
             payload_obj = build_erp_payload(erp_row)
             wagon_number = (payload_obj.get("AdministrativeDataSet") or {}).get("WagonNumberFreight")
             wagon_number_str = str(wagon_number) if wagon_number is not None else None
+
+            if save_compare and wagon_number_str:
+                now = datetime.utcnow().isoformat(timespec="seconds")
+                conn.execute(
+                    f"""
+                    INSERT INTO {upload_table} (
+                        wagon_number_freight,
+                        rsrd_wagon_id,
+                        payload_json,
+                        diff_json,
+                        rsrd_json,
+                        created_at,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(wagon_number_freight) DO UPDATE SET
+                        rsrd_wagon_id=excluded.rsrd_wagon_id,
+                        payload_json=excluded.payload_json,
+                        diff_json=excluded.diff_json,
+                        rsrd_json=excluded.rsrd_json,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        wagon_number_str,
+                        row["rsrd_wagon_id"],
+                        serialize_payload(payload_obj),
+                        serialize_diffs(diffs),
+                        row["dataset_json"],
+                        now,
+                        now,
+                    ),
+                )
 
             if create_upload and diff_count > 0 and wagon_number_str:
                 now = datetime.utcnow().isoformat(timespec="seconds")
@@ -7828,14 +10765,479 @@ def ask_m3_knowledge(payload: dict = Body(...), request: Request = None) -> dict
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+_MEHR_MODULE = None
+MEHR_DEFAULT_YEAR = 2025
+MEHR_FABRIC_IMPORT_JOB_TYPE = "mehrkilometer_fabric_import"
+MEHR_ALLOWED_DOWNLOAD_KINDS = {
+    "source_overview",
+    "source_kilometer",
+    "output_overview",
+    "output_details",
+    "special_output_overview",
+    "special_output_details",
+}
+
+
+def _mehr_module():
+    global _MEHR_MODULE
+    if _MEHR_MODULE is None:
+        try:
+            _MEHR_MODULE = importlib.import_module("app")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=500,
+                detail=f"Mehrkilometer-Modul konnte nicht geladen werden: {exc}",
+            ) from exc
+    return _MEHR_MODULE
+
+
+def _mehr_sanitize_year(year: int | None) -> int:
+    if year is None:
+        return MEHR_DEFAULT_YEAR
+    return max(2000, min(3000, int(year)))
+
+
+def _mehr_set_job_result(job_id: str, values: Dict[str, Any]) -> None:
+    if not values:
+        return
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job:
+            return
+        current = job.get("result")
+        if not isinstance(current, dict):
+            current = {}
+        current.update(values)
+        job["result"] = current
+
+
+def _mehr_get_job_result(job_id: str) -> Dict[str, Any]:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job:
+            return {}
+        result = job.get("result")
+        if isinstance(result, dict):
+            return dict(result)
+    return {}
+
+
+def _mehr_job_elapsed_seconds(snapshot: Dict[str, Any]) -> int | None:
+    started_raw = snapshot.get("started")
+    if not started_raw:
+        return None
+    try:
+        started_at = datetime.fromisoformat(str(started_raw))
+    except Exception:
+        return None
+    finished_raw = snapshot.get("finished")
+    if finished_raw:
+        try:
+            finished_at = datetime.fromisoformat(str(finished_raw))
+        except Exception:
+            finished_at = datetime.utcnow()
+    else:
+        finished_at = datetime.utcnow()
+    elapsed = int((finished_at - started_at).total_seconds())
+    return max(0, elapsed)
+
+
+def _mehr_fabric_progress_callback(job_id: str):
+    def _callback(payload: Dict[str, Any]) -> None:
+        stage = str(payload.get("stage") or "").strip()
+        message = str(payload.get("message") or "").strip()
+        rows_total = payload.get("rows_total")
+        rows_written = payload.get("rows_written")
+        update: Dict[str, Any] = {}
+        if stage:
+            update["stage"] = stage
+        if message:
+            update["message"] = message
+        if rows_total is not None:
+            update["rows_total"] = int(rows_total)
+        if rows_written is not None:
+            update["rows_written"] = int(rows_written)
+        _mehr_set_job_result(job_id, update)
+        if message:
+            _append_job_log(job_id, message)
+
+    return _callback
+
+
+def _mehr_run_fabric_import_job(job_id: str, year: int) -> None:
+    mod = _mehr_module()
+    _mehr_set_job_result(
+        job_id,
+        {
+            "year": year,
+            "stage": "starting",
+            "message": "Import startet ...",
+            "rows_total": None,
+            "rows_written": 0,
+        },
+    )
+    try:
+        payload = mod._refresh_mehrkilometer_fabric_sqlite(
+            year,
+            progress=_mehr_fabric_progress_callback(job_id),
+        )
+        final = _mehr_get_job_result(job_id)
+        final.update(payload)
+        final["stage"] = "completed"
+        final["message"] = "Import abgeschlossen."
+        final["rows_total"] = int(payload.get("row_count") or 0)
+        final["rows_written"] = int(payload.get("row_count") or 0)
+        _finish_job(job_id, "completed", result=final)
+    except Exception as exc:  # noqa: BLE001
+        final = _mehr_get_job_result(job_id)
+        final["year"] = year
+        final["stage"] = "failed"
+        final["message"] = str(exc)
+        _finish_job(job_id, "failed", result=final, error=str(exc))
+
+
+def _mehr_file_info(mod, file_path: Path | None, kind: str) -> dict:
+    if file_path is None:
+        return {"exists": False}
+    download_url = (
+        f"/api/mehrkilometer/download?kind={quote(kind, safe='')}&name={quote(file_path.name, safe='')}"
+    )
+    try:
+        rel_path = file_path.resolve().relative_to(mod.REPO_ROOT.resolve()).as_posix()
+        download_url += f"&rel={quote(rel_path, safe='')}"
+    except ValueError:
+        pass
+    return {
+        "exists": True,
+        "name": file_path.name,
+        "download_url": download_url,
+    }
+
+
+def _mehr_extract_year_from_filename(file_path: Path | None) -> int | None:
+    if file_path is None:
+        return None
+    match = re.search(r"_(\d{4})_\d{8}_\d{6}\.xlsx$", file_path.name)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _mehr_build_sources_payload(year: int) -> dict:
+    mod = _mehr_module()
+    source_overview, source_km = mod._discover_source_files(year)
+    output_overview = mod._pick_latest_file(
+        mod.MEHR_OUTPUT_DIR,
+        lambda n: n.endswith(".xlsx") and n.startswith(f"vertragsuebersicht_{year}_"),
+    )
+    output_details = mod._pick_latest_file(
+        mod.MEHR_OUTPUT_DIR,
+        lambda n: n.endswith(".xlsx") and n.startswith(f"einzelabrechnungen_detail_{year}_"),
+    )
+    special_output_overview = mod._pick_latest_file(
+        mod.MEHR_OUTPUT_DIR,
+        lambda n: n.endswith(".xlsx") and n.startswith(f"special_vertragsuebersicht_{year}_"),
+    )
+    special_output_details = mod._pick_latest_file(
+        mod.MEHR_OUTPUT_DIR,
+        lambda n: n.endswith(".xlsx")
+        and n.startswith(f"special_einzelabrechnungen_detail_{year}_"),
+    )
+    special_from_other_year = False
+    if special_output_overview is None:
+        special_output_overview = mod._pick_latest_file(
+            mod.MEHR_OUTPUT_DIR,
+            lambda n: n.endswith(".xlsx") and n.startswith("special_vertragsuebersicht_"),
+        )
+        special_from_other_year = special_output_overview is not None
+    if special_output_details is None:
+        special_output_details = mod._pick_latest_file(
+            mod.MEHR_OUTPUT_DIR,
+            lambda n: n.endswith(".xlsx")
+            and n.startswith("special_einzelabrechnungen_detail_"),
+        )
+        special_from_other_year = special_from_other_year or (special_output_details is not None)
+
+    browser_url = None
+    try:
+        browser_url = f"/{mod.MEHR_OUTPUT_DIR.resolve().relative_to(mod.REPO_ROOT.resolve()).as_posix()}/"
+    except ValueError:
+        browser_url = None
+
+    payload = {
+        "recommended_year": year,
+        "sources": {
+            "overview": _mehr_file_info(mod, source_overview, "source_overview"),
+            "kilometer": _mehr_file_info(mod, source_km, "source_kilometer"),
+        },
+        "outputs": {
+            "overview": _mehr_file_info(mod, output_overview, "output_overview"),
+            "details": _mehr_file_info(mod, output_details, "output_details"),
+        },
+        "special_outputs": {
+            "overview": _mehr_file_info(
+                mod, special_output_overview, "special_output_overview"
+            ),
+            "details": _mehr_file_info(mod, special_output_details, "special_output_details"),
+        },
+        "paths": {
+            "output_dir": {
+                "path": str(mod.MEHR_OUTPUT_DIR),
+                "browser_url": browser_url,
+            },
+            "source_dirs": [str(path) for path in mod._source_search_dirs()],
+        },
+    }
+
+    if source_overview is None or source_km is None:
+        payload["warning"] = "Eine oder mehrere Quelldateien fehlen."
+    elif output_overview is None or output_details is None:
+        payload["warning"] = "Für dieses Jahr liegen noch keine lokalen Output-Dateien vor."
+    elif special_from_other_year:
+        fallback_year = _mehr_extract_year_from_filename(special_output_overview)
+        if fallback_year is None:
+            fallback_year = _mehr_extract_year_from_filename(special_output_details)
+        if fallback_year is not None and fallback_year != year:
+            payload["warning"] = (
+                f"Für {year} wurden keine Spezialdateien gefunden. "
+                f"Es werden die letzten verfügbaren Spezialdateien aus {fallback_year} angezeigt."
+            )
+    return payload
+
+
+def _mehr_safe_repo_relative_file(mod, rel_path: str) -> Path | None:
+    if not rel_path or rel_path.startswith("/") or rel_path.startswith("\\"):
+        return None
+    if ".." in rel_path:
+        return None
+    candidate = (mod.REPO_ROOT / rel_path).resolve()
+    try:
+        candidate.relative_to(mod.REPO_ROOT.resolve())
+    except ValueError:
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate
+
+
+def _mehr_safe_file(base_dir: Path, filename: str) -> Path | None:
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return None
+    candidate = (base_dir / filename).resolve()
+    try:
+        candidate.relative_to(base_dir.resolve())
+    except ValueError:
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate
+
+
+def _mehr_is_allowed_download_file(mod, path: Path, kind: str) -> bool:
+    if kind in {"source_overview", "source_kilometer"}:
+        return mod._is_under_any_directory(path, mod._source_search_dirs())
+    return mod._is_under_directory(path, mod.MEHR_OUTPUT_DIR)
+
+
+def _mehr_resolve_source_file_for_download(mod, filename: str, kind: str) -> Path | None:
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return None
+    candidates = [path for path in mod._collect_source_excel_files() if path.name == filename]
+    if not candidates:
+        return None
+    year_hint = mod._guess_source_year(filename) or MEHR_DEFAULT_YEAR
+    source_kind = "overview" if kind == "source_overview" else "kilometer"
+    return mod._select_best_source_file(candidates, source_kind, year_hint)
+
+
+@app.get("/api/mehrkilometer/sources")
+def mehrkilometer_sources(year: int = Query(MEHR_DEFAULT_YEAR)) -> dict:
+    return _mehr_build_sources_payload(_mehr_sanitize_year(year))
+
+
+@app.get("/api/mehrkilometer/download")
+def mehrkilometer_download(
+    kind: str = Query(...),
+    name: str = Query(...),
+    rel: str = Query(""),
+) -> Response:
+    mod = _mehr_module()
+    if kind not in MEHR_ALLOWED_DOWNLOAD_KINDS:
+        raise HTTPException(status_code=400, detail="Ungültiger Download-Typ.")
+
+    file_path = None
+    if rel:
+        decoded_rel = unquote(rel)
+        file_path = _mehr_safe_repo_relative_file(mod, decoded_rel)
+        if file_path is not None and file_path.name != name:
+            file_path = None
+        if file_path is not None and not _mehr_is_allowed_download_file(mod, file_path, kind):
+            file_path = None
+
+    if file_path is None and kind in {"source_overview", "source_kilometer"}:
+        file_path = _mehr_resolve_source_file_for_download(mod, name, kind)
+
+    if file_path is None and kind in {
+        "output_overview",
+        "output_details",
+        "special_output_overview",
+        "special_output_details",
+    }:
+        file_path = _mehr_safe_file(mod.MEHR_OUTPUT_DIR, name)
+
+    if file_path is None:
+        raise HTTPException(status_code=404, detail="Datei nicht gefunden.")
+
+    return FileResponse(
+        file_path,
+        filename=file_path.name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.get("/api/mehrkilometer/fabric/health")
+def mehrkilometer_fabric_health() -> dict:
+    mod = _mehr_module()
+    try:
+        return mod._fabric_health_check()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/mehrkilometer/fabric/status")
+def mehrkilometer_fabric_status(year: int = Query(MEHR_DEFAULT_YEAR)) -> dict:
+    mod = _mehr_module()
+    safe_year = _mehr_sanitize_year(year)
+    try:
+        return mod._mehrkilometer_fabric_status(safe_year)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/mehrkilometer/fabric/import/start")
+def mehrkilometer_fabric_import_start(year: int = Query(MEHR_DEFAULT_YEAR)) -> dict:
+    safe_year = _mehr_sanitize_year(year)
+    job = _create_job(MEHR_FABRIC_IMPORT_JOB_TYPE, "prd")
+    _mehr_set_job_result(
+        job["id"],
+        {
+            "year": safe_year,
+            "stage": "queued",
+            "message": "Import wurde gestartet.",
+            "rows_total": None,
+            "rows_written": 0,
+        },
+    )
+    threading.Thread(
+        target=_mehr_run_fabric_import_job,
+        args=(job["id"], safe_year),
+        daemon=True,
+    ).start()
+    return {"job_id": job["id"], "status": "running", "year": safe_year}
+
+
+@app.get("/api/mehrkilometer/fabric/import/status")
+def mehrkilometer_fabric_import_status(job_id: str = Query(...)) -> dict:
+    snapshot = _job_snapshot(job_id)
+    if snapshot.get("type") != MEHR_FABRIC_IMPORT_JOB_TYPE:
+        raise HTTPException(status_code=400, detail="Ungültiger Job-Typ.")
+    result = snapshot.get("result")
+    if not isinstance(result, dict):
+        result = {}
+    return {
+        "job_id": job_id,
+        "status": snapshot.get("status"),
+        "stage": result.get("stage"),
+        "message": result.get("message"),
+        "year": result.get("year"),
+        "rows_written": result.get("rows_written"),
+        "rows_total": result.get("rows_total"),
+        "elapsed_seconds": _mehr_job_elapsed_seconds(snapshot),
+        "started": snapshot.get("started"),
+        "finished": snapshot.get("finished"),
+        "error": snapshot.get("error"),
+        "result": result if snapshot.get("status") == "completed" else None,
+    }
+
+
+@app.post("/api/mehrkilometer/fabric/import")
+def mehrkilometer_fabric_import(year: int = Query(MEHR_DEFAULT_YEAR)) -> dict:
+    mod = _mehr_module()
+    safe_year = _mehr_sanitize_year(year)
+    try:
+        return mod._refresh_mehrkilometer_fabric_sqlite(safe_year)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/mehrkilometer/fabric/stagli")
+def mehrkilometer_fabric_stagli(limit: int = Query(100)) -> dict:
+    mod = _mehr_module()
+    safe_limit = max(1, min(5000, int(limit)))
+    try:
+        values = mod._fetch_stagli_scnm(safe_limit)
+        return {
+            "count": len(values),
+            "query": f"SELECT TOP ({safe_limit}) SCNM FROM landing.stagli",
+            "rows": values,
+        }
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/mehrkilometer/create")
+def mehrkilometer_create(year: int = Query(MEHR_DEFAULT_YEAR)) -> dict:
+    mod = _mehr_module()
+    safe_year = _mehr_sanitize_year(year)
+    try:
+        created_overview, created_details = mod._create_settlement_files(safe_year)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Abrechnung fehlgeschlagen: {exc}") from exc
+
+    payload = _mehr_build_sources_payload(safe_year)
+    payload["outputs"] = {
+        "overview": _mehr_file_info(mod, created_overview, "output_overview"),
+        "details": _mehr_file_info(mod, created_details, "output_details"),
+    }
+    return payload
+
+
+@app.post("/api/mehrkilometer/create-special")
+def mehrkilometer_create_special(year: int = Query(MEHR_DEFAULT_YEAR)) -> dict:
+    mod = _mehr_module()
+    safe_year = _mehr_sanitize_year(year)
+    try:
+        created_overview, created_details = mod._create_special_settlement_files(safe_year)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Spezialabrechnung fehlgeschlagen: {exc}",
+        ) from exc
+
+    payload = _mehr_build_sources_payload(safe_year)
+    payload["special_outputs"] = {
+        "overview": _mehr_file_info(mod, created_overview, "special_output_overview"),
+        "details": _mehr_file_info(mod, created_details, "special_output_details"),
+    }
+    payload["warning"] = "Spezialabrechnung für Grampet, Railcare und Raildox wurde erzeugt."
+    return payload
+
+
+@app.post("/api/mehrkilometer/vertragsexcel/import")
+def mehrkilometer_vertragsexcel_import(year: int = Query(MEHR_DEFAULT_YEAR)) -> dict:
+    safe_year = _mehr_sanitize_year(year)
+    raise HTTPException(
+        status_code=501,
+        detail=f"Vertragsexcel-SQL für Jahr {safe_year} ist noch nicht hinterlegt.",
+    )
+
+
 @app.get("/apps/christian/AppRSRD", include_in_schema=False)
 @app.get("/apps/christian/AppRSRD/", include_in_schema=False)
-@app.get("/apps/christian/AppRSRD/frontend", include_in_schema=False)
-@app.get("/apps/christian/AppRSRD/frontend/", include_in_schema=False)
 def rsrd_legacy_entry_redirect() -> RedirectResponse:
-    # If frontend is mounted at repo root, serve prefixed app path.
-    if (FRONTEND_DIR / "rsrd2.html").exists():
-        return RedirectResponse(url="/rsrd2.html", status_code=302)
     return RedirectResponse(
         url="/apps/christian/AppRSRD/frontend/rsrd2.html",
         status_code=302,
@@ -7851,7 +11253,35 @@ def mehrkilometer_frontend_redirect() -> RedirectResponse:
     )
 
 
+@app.get("/api-config.js", include_in_schema=False)
+def shared_api_config_js() -> PlainTextResponse:
+    return PlainTextResponse(
+        "window.__SPAREPART_API_CONFIG__ = { CORE_API_BASE_URL: '' };",
+        media_type="application/javascript",
+    )
+
+
+@app.get("/", include_in_schema=False)
+def portal_index() -> FileResponse:
+    portal_file = PROJECT_ROOT / "index.html"
+    if not portal_file.exists():
+        raise HTTPException(status_code=404, detail="Portal index.html nicht gefunden.")
+    return FileResponse(
+        portal_file,
+        media_type="text/html",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
+
+
 # Serve frontend assets
+APPS_DIR = PROJECT_ROOT / "apps"
+if APPS_DIR.exists():
+    app.mount(
+        "/apps",
+        AuthStaticFiles(directory=APPS_DIR, html=True),
+        name="apps-static",
+    )
+
 if FRONTEND_DIR.exists():
     app.mount(
         "/",

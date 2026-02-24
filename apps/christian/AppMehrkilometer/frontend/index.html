@@ -22,16 +22,66 @@
         background: var(--bg);
         color: var(--text);
       }
+      .m3-header {
+        position: sticky;
+        top: 0;
+        z-index: 40;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 18px;
+        background: rgba(255, 255, 255, 0.95);
+        border-bottom: 1px solid var(--border);
+        backdrop-filter: blur(6px);
+      }
+      .header-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .home-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 34px;
+        padding: 0 12px;
+        border-radius: 8px;
+        border: 1px solid #8ea8cd;
+        background: linear-gradient(180deg, #fdfefe, #eef4fc);
+        color: #1d3b62;
+        font-size: 13px;
+        font-weight: 700;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+      .home-btn:hover {
+        border-color: #6f90bc;
+        box-shadow: 0 4px 10px rgba(16, 52, 98, 0.16);
+        text-decoration: none;
+      }
+      .app-title {
+        font-size: 16px;
+        font-weight: 700;
+        color: #122744;
+      }
+      .app-subtitle {
+        color: var(--muted);
+        font-size: 12px;
+      }
       main {
         max-width: 920px;
         margin: 0 auto;
-        padding: 28px 18px 40px;
+        padding: 12px 18px 40px;
       }
       h1 {
         margin: 0 0 8px;
       }
+      h2 {
+        margin: 0 0 8px;
+        font-size: 19px;
+      }
       p {
-        margin: 0 0 14px;
+        margin: 0 0 10px;
         line-height: 1.45;
         color: var(--muted);
       }
@@ -39,8 +89,8 @@
         background: var(--panel);
         border: 1px solid var(--border);
         border-radius: 12px;
-        padding: 14px;
-        margin-top: 14px;
+        padding: 12px;
+        margin-top: 10px;
       }
       .grid {
         display: grid;
@@ -62,27 +112,37 @@
       .row {
         display: flex;
         align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .controls-row {
+        flex-wrap: nowrap;
+      }
+      .controls-row label {
+        white-space: nowrap;
+        font-weight: 700;
       }
       input[type="number"] {
         width: 110px;
         border: 1px solid var(--border);
         border-radius: 8px;
-        padding: 8px;
+        padding: 8px 9px;
       }
       button {
         border: 0;
         border-radius: 8px;
-        padding: 9px 14px;
+        padding: 9px 12px;
         background: var(--brand);
         color: #fff;
         font-weight: 700;
         cursor: pointer;
+        white-space: nowrap;
       }
       button:disabled {
         opacity: 0.6;
         cursor: default;
+      }
+      button.secondary {
+        background: #5a6f8f;
       }
       a {
         color: var(--brand);
@@ -92,8 +152,9 @@
         text-decoration: underline;
       }
       .status {
-        margin-top: 10px;
+        margin-top: 8px;
         font-size: 14px;
+        min-height: 18px;
       }
       .status.ok {
         color: var(--ok);
@@ -104,21 +165,88 @@
       .status.err {
         color: #b00020;
       }
+      .loading-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(10, 20, 36, 0.45);
+        backdrop-filter: blur(2px);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+      }
+      .loading-overlay.visible {
+        display: flex;
+      }
+      .loading-modal {
+        width: min(92vw, 460px);
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 18px;
+        box-shadow: 0 14px 40px rgba(9, 22, 42, 0.25);
+      }
+      .loading-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .loading-spinner {
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        border: 3px solid #d6e2f3;
+        border-top-color: var(--brand);
+        animation: spin 0.9s linear infinite;
+        flex-shrink: 0;
+      }
+      .loading-title {
+        font-size: 16px;
+        font-weight: 700;
+      }
+      .loading-message {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 14px;
+        white-space: pre-line;
+      }
+      .loading-elapsed {
+        margin-top: 10px;
+        font-size: 13px;
+        color: #2f4b6f;
+        font-weight: 700;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (max-width: 980px) {
+        .controls-row {
+          flex-wrap: wrap;
+        }
+      }
     </style>
   </head>
   <body>
+    <header class="m3-header">
+      <div class="header-left">
+        <a class="home-btn" href="/" aria-label="Zurück zum Portal">Home</a>
+        <div>
+          <div class="app-title">MFD Automation</div>
+          <div class="app-subtitle">MFDApps · Mehrkilometer</div>
+        </div>
+      </div>
+    </header>
     <main>
       <h1>AppMehrkilometer</h1>
-      <p>Quelle prüfen, Abrechnung erzeugen und Dateien herunterladen.</p>
 
       <section class="panel">
-        <div class="row">
+        <div class="row controls-row">
           <label for="yearInput">Abrechnungsjahr:</label>
           <input id="yearInput" type="number" min="2000" max="3000" />
-          <button id="refreshBtn" type="button">Dateien aktualisieren</button>
-          <button id="createBtn" type="button">Abrechnung erstellen</button>
-          <button id="createSpecialBtn" type="button">Spezial: Grampet/Railcare/Raildox</button>
-          <button id="fabricImportBtn" type="button">Fabric-Daten importieren</button>
+          <button id="fabricImportBtn" type="button">Kilometer Daten importieren</button>
+          <button id="contractImportBtn" type="button">Abrechnungsdaten importieren</button>
         </div>
         <div id="status" class="status"></div>
       </section>
@@ -185,8 +313,17 @@
         </div>
       </section>
 
-      <p><a href="/">Zurück zum Portal</a></p>
     </main>
+    <div id="loadingOverlay" class="loading-overlay" aria-hidden="true">
+      <div class="loading-modal" role="dialog" aria-modal="true" aria-labelledby="loadingTitle">
+        <div class="loading-header">
+          <div class="loading-spinner" aria-hidden="true"></div>
+          <div id="loadingTitle" class="loading-title">Ladevorgang läuft</div>
+        </div>
+        <div id="loadingElapsed" class="loading-elapsed">Laufzeit: 00:00</div>
+        <div id="loadingMessage" class="loading-message">Bitte warten ...</div>
+      </div>
+    </div>
     <script>
       (function initMehrkilometerPage() {
         const cfg = window.__SPAREPART_API_CONFIG__ || {};
@@ -194,11 +331,13 @@
         const api = (path) => (base ? `${base}${path}` : path);
 
         const yearInput = document.getElementById("yearInput");
-        const refreshBtn = document.getElementById("refreshBtn");
-        const createBtn = document.getElementById("createBtn");
-        const createSpecialBtn = document.getElementById("createSpecialBtn");
         const fabricImportBtn = document.getElementById("fabricImportBtn");
+        const contractImportBtn = document.getElementById("contractImportBtn");
         const statusEl = document.getElementById("status");
+        const loadingOverlay = document.getElementById("loadingOverlay");
+        const loadingTitle = document.getElementById("loadingTitle");
+        const loadingElapsed = document.getElementById("loadingElapsed");
+        const loadingMessage = document.getElementById("loadingMessage");
 
         const sourceOverviewName = document.getElementById("sourceOverviewName");
         const sourceKmName = document.getElementById("sourceKmName");
@@ -217,11 +356,72 @@
 
         const DEFAULT_YEAR = 2025;
         yearInput.value = String(DEFAULT_YEAR);
-        let yearInitialized = false;
+        let loadingCount = 0;
+        let loadingStartedAtMs = 0;
+        let loadingTimerId = null;
 
         const setStatus = (msg, kind) => {
           statusEl.textContent = msg || "";
           statusEl.className = `status ${kind || ""}`.trim();
+        };
+
+        const formatElapsed = (seconds) => {
+          const safe = Math.max(0, Number.isFinite(seconds) ? Math.floor(seconds) : 0);
+          const minutes = Math.floor(safe / 60);
+          const rest = safe % 60;
+          return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+        };
+
+        const refreshElapsed = () => {
+          if (!loadingStartedAtMs) {
+            loadingElapsed.textContent = "Laufzeit: 00:00";
+            return;
+          }
+          const seconds = Math.floor((Date.now() - loadingStartedAtMs) / 1000);
+          loadingElapsed.textContent = `Laufzeit: ${formatElapsed(seconds)}`;
+        };
+
+        const setActionState = (disabled) => {
+          yearInput.disabled = disabled;
+          fabricImportBtn.disabled = disabled;
+          contractImportBtn.disabled = disabled;
+        };
+
+        const showLoading = (title, message) => {
+          loadingTitle.textContent = title || "Ladevorgang läuft";
+          loadingMessage.textContent = message || "Bitte warten ...";
+          loadingStartedAtMs = Date.now();
+          refreshElapsed();
+          if (loadingTimerId) clearInterval(loadingTimerId);
+          loadingTimerId = setInterval(refreshElapsed, 1000);
+          loadingOverlay.classList.add("visible");
+          loadingOverlay.setAttribute("aria-hidden", "false");
+        };
+
+        const hideLoading = () => {
+          if (loadingTimerId) {
+            clearInterval(loadingTimerId);
+            loadingTimerId = null;
+          }
+          loadingStartedAtMs = 0;
+          loadingElapsed.textContent = "Laufzeit: 00:00";
+          loadingOverlay.classList.remove("visible");
+          loadingOverlay.setAttribute("aria-hidden", "true");
+        };
+
+        const setLoadingMessage = (message) => {
+          loadingMessage.textContent = message || "Bitte warten ...";
+        };
+
+        const withLoading = async (title, message, work) => {
+          loadingCount += 1;
+          if (loadingCount === 1) showLoading(title, message);
+          try {
+            return await work();
+          } finally {
+            loadingCount = Math.max(0, loadingCount - 1);
+            if (loadingCount === 0) hideLoading();
+          }
         };
 
         const renderFile = (nameEl, linkEl, data, emptyText) => {
@@ -257,7 +457,7 @@
 
         const renderFabricStatus = (payload) => {
           if (payload && payload.exists) {
-            fabricStatusText.textContent = `Jahr ${payload.year}: ${payload.row_count} Zeilen, Stand ${payload.refreshed_at || "-"}`;
+            fabricStatusText.textContent = `Jahr ${payload.year}: ${payload.row_count} Zeilen in ${payload.table_name || "-"}, Stand ${payload.refreshed_at || "-"}`;
             fabricStatusText.classList.remove("missing");
             fabricDbPath.textContent = payload.sqlite_path || "-";
             fabricDbPath.classList.remove("missing");
@@ -269,198 +469,164 @@
           }
         };
 
-        const addDerivedSpecialOutputs = async (payload, year) => {
-          const hasSpecialOverview =
-            payload.special_outputs &&
-            payload.special_outputs.overview &&
-            payload.special_outputs.overview.exists;
-          const hasSpecialDetails =
-            payload.special_outputs &&
-            payload.special_outputs.details &&
-            payload.special_outputs.details.exists;
-          if (hasSpecialOverview && hasSpecialDetails) return;
-
-          const browserUrl =
-            payload.paths &&
-            payload.paths.output_dir &&
-            payload.paths.output_dir.browser_url;
-          if (!browserUrl) return;
-
-          try {
-            const resp = await fetch(api(browserUrl));
-            const html = await resp.text();
-            if (!resp.ok || !html) return;
-
-            const hrefs = Array.from(
-              html.matchAll(/href=\"([^\"]+special_[^\"]+\.xlsx)\"/g),
-              (m) => decodeURIComponent(String(m[1]).replace(/^\.?\//, ""))
-            );
-            const findLatest = (prefix) => {
-              const yearMatches = hrefs.filter((n) => n.startsWith(prefix) && n.includes(`_${year}_`));
-              const candidates = yearMatches.length ? yearMatches : hrefs.filter((n) => n.startsWith(prefix));
-              if (!candidates.length) return null;
-              return [...candidates].sort().reverse()[0];
-            };
-
-            const overviewName = findLatest("special_vertragsuebersicht_");
-            const detailsName = findLatest("special_einzelabrechnungen_detail_");
-            if (!overviewName && !detailsName) return;
-
-            payload.special_outputs = payload.special_outputs || {};
-            if (overviewName) {
-              payload.special_outputs.overview = {
-                exists: true,
-                name: overviewName,
-                download_url: `/api/mehrkilometer/download?kind=special_output_overview&name=${encodeURIComponent(overviewName)}`,
-              };
-            }
-            if (detailsName) {
-              payload.special_outputs.details = {
-                exists: true,
-                name: detailsName,
-                download_url: `/api/mehrkilometer/download?kind=special_output_details&name=${encodeURIComponent(detailsName)}`,
-              };
-            }
-          } catch (_) {
-            // keep original payload when fallback lookup fails
-          }
-        };
-
         const currentYear = () => {
           const parsed = Number.parseInt(yearInput.value, 10);
           if (!Number.isFinite(parsed)) return DEFAULT_YEAR;
           return Math.max(2000, Math.min(3000, parsed));
         };
 
-        const refresh = async () => {
-          const year = currentYear();
-          yearInput.value = String(year);
-          try {
-            const [sourcesResp, fabricStatusResp] = await Promise.all([
-              fetch(api(`/api/mehrkilometer/sources?year=${encodeURIComponent(year)}`)),
-              fetch(api(`/api/mehrkilometer/fabric/status?year=${encodeURIComponent(year)}`)),
-            ]);
-            const payload = await sourcesResp.json().catch(() => ({}));
-            const fabricPayload = await fabricStatusResp.json().catch(() => ({}));
-            if (!sourcesResp.ok) throw new Error(payload.detail || "Dateien konnten nicht geladen werden.");
-            if (!fabricStatusResp.ok) throw new Error(fabricPayload.detail || "Fabric-Status konnte nicht geladen werden.");
+        const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
-            if (!yearInitialized) {
-              const recommended = Number.parseInt(payload.recommended_year, 10);
-              yearInitialized = true;
-              if (Number.isFinite(recommended) && recommended >= 2000 && recommended <= 3000 && recommended !== year) {
-                yearInput.value = String(recommended);
-                return refresh();
-              }
+        const fetchJsonWithRetry = async (url, options = {}, retries = 3) => {
+          let lastError = null;
+          for (let attempt = 1; attempt <= retries; attempt += 1) {
+            try {
+              const response = await fetch(url, options);
+              const body = await response.json().catch(() => ({}));
+              return { response, body };
+            } catch (error) {
+              lastError = error;
+              if (attempt >= retries) break;
+              await sleep(300 * attempt);
             }
-
-            await addDerivedSpecialOutputs(payload, year);
-            renderFile(sourceOverviewName, sourceOverviewLink, payload.sources && payload.sources.overview, "Nicht gefunden");
-            renderFile(sourceKmName, sourceKmLink, payload.sources && payload.sources.kilometer, "Nicht gefunden");
-            renderOutputs(payload);
-            renderFabricStatus(fabricPayload);
-            if (payload.warning) {
-              setStatus(payload.warning, "warn");
-            } else {
-              setStatus("Dateien geladen.", "ok");
-            }
-          } catch (err) {
-            setStatus(err.message || "Fehler beim Laden.", "err");
           }
+          throw lastError || new Error("Netzwerkfehler");
         };
 
-        const createSettlement = async () => {
+        const loadCurrentState = async () => {
           const year = currentYear();
           yearInput.value = String(year);
-          createBtn.disabled = true;
-          createSpecialBtn.disabled = true;
-          fabricImportBtn.disabled = true;
-          setStatus("Abrechnung läuft ...", "");
-          try {
-            const resp = await fetch(api(`/api/mehrkilometer/create?year=${encodeURIComponent(year)}`), {
-              method: "POST",
-            });
-            const payload = await resp.json().catch(() => ({}));
-            if (!resp.ok) throw new Error(payload.detail || "Abrechnung fehlgeschlagen.");
-            await addDerivedSpecialOutputs(payload, year);
-            renderOutputs(payload);
-            if (payload.warning) {
-              setStatus(`Abrechnung erstellt. ${payload.warning}`, "warn");
-            } else {
-              setStatus("Abrechnung erfolgreich erstellt.", "ok");
-            }
-          } catch (err) {
-            setStatus(err.message || "Abrechnung fehlgeschlagen.", "err");
-          } finally {
-            createBtn.disabled = false;
-            createSpecialBtn.disabled = false;
-            fabricImportBtn.disabled = false;
-          }
-        };
+          const [sourcesResp, fabricStatusResp] = await Promise.all([
+            fetch(api(`/api/mehrkilometer/sources?year=${encodeURIComponent(year)}`)),
+            fetch(api(`/api/mehrkilometer/fabric/status?year=${encodeURIComponent(year)}`)),
+          ]);
+          const payload = await sourcesResp.json().catch(() => ({}));
+          const fabricPayload = await fabricStatusResp.json().catch(() => ({}));
+          if (!sourcesResp.ok) throw new Error(payload.detail || "Dateien konnten nicht geladen werden.");
+          if (!fabricStatusResp.ok) throw new Error(fabricPayload.detail || "Fabric-Status konnte nicht geladen werden.");
 
-        const createSpecialSettlement = async () => {
-          const year = currentYear();
-          yearInput.value = String(year);
-          createBtn.disabled = true;
-          createSpecialBtn.disabled = true;
-          fabricImportBtn.disabled = true;
-          setStatus("Spezialabrechnung läuft ...", "");
-          try {
-            const resp = await fetch(api(`/api/mehrkilometer/create-special?year=${encodeURIComponent(year)}`), {
-              method: "POST",
-            });
-            const payload = await resp.json().catch(() => ({}));
-            if (!resp.ok) throw new Error(payload.detail || "Spezialabrechnung fehlgeschlagen.");
-            await addDerivedSpecialOutputs(payload, year);
-            renderOutputs(payload);
-            setStatus(
-              payload.warning || "Spezialabrechnung erfolgreich erstellt.",
-              "ok"
-            );
-          } catch (err) {
-            setStatus(err.message || "Spezialabrechnung fehlgeschlagen.", "err");
-          } finally {
-            createBtn.disabled = false;
-            createSpecialBtn.disabled = false;
-            fabricImportBtn.disabled = false;
+          renderFile(sourceOverviewName, sourceOverviewLink, payload.sources && payload.sources.overview, "Nicht gefunden");
+          renderFile(sourceKmName, sourceKmLink, payload.sources && payload.sources.kilometer, "Nicht gefunden");
+          renderOutputs(payload);
+          renderFabricStatus(fabricPayload);
+
+          if (payload.warning) {
+            setStatus(payload.warning, "warn");
+          } else {
+            setStatus("Datenstand aktualisiert.", "ok");
           }
         };
 
         const importFabricData = async () => {
           const year = currentYear();
           yearInput.value = String(year);
-          createBtn.disabled = true;
-          createSpecialBtn.disabled = true;
-          fabricImportBtn.disabled = true;
-          setStatus("Fabric-Import läuft ...", "");
+          setActionState(true);
+          setStatus("Kilometer-Datenimport läuft ...", "");
           try {
-            const resp = await fetch(api(`/api/mehrkilometer/fabric/import?year=${encodeURIComponent(year)}`), {
-              method: "POST",
-            });
-            const payload = await resp.json().catch(() => ({}));
-            if (!resp.ok) throw new Error(payload.detail || "Fabric-Import fehlgeschlagen.");
+            const targetTable = `Mehr_Kiloemter_${year}`;
+            const payload = await withLoading(
+              "Kilometerdaten importieren",
+              `Von SQL: landing.stagli + landing.AWSNOTIFICATIONSHORT\nNach SQLite: ${targetTable}`,
+              async () => {
+                const { response: startResp, body: startBody } = await fetchJsonWithRetry(
+                  api(`/api/mehrkilometer/fabric/import/start?year=${encodeURIComponent(year)}`),
+                  { method: "POST" },
+                  3
+                );
+                if (!startResp.ok) throw new Error(startBody.detail || "Kilometer-Datenimport konnte nicht gestartet werden.");
+                const jobId = startBody.job_id;
+                if (!jobId) throw new Error("Import-Job-ID fehlt.");
+
+                for (;;) {
+                  const { response: statusResp, body: statusBody } = await fetchJsonWithRetry(
+                    api(`/api/mehrkilometer/fabric/import/status?job_id=${encodeURIComponent(jobId)}`),
+                    {},
+                    3
+                  );
+                  if (!statusResp.ok) {
+                    throw new Error(statusBody.detail || "Statusabfrage für Kilometer-Datenimport fehlgeschlagen.");
+                  }
+
+                  const rowText = statusBody.rows_total == null
+                    ? null
+                    : `Zeilen geschrieben: ${statusBody.rows_written || 0} / ${statusBody.rows_total}`;
+                  setLoadingMessage(
+                    [
+                      `Von SQL: landing.stagli + landing.AWSNOTIFICATIONSHORT`,
+                      `Nach SQLite: ${targetTable}`,
+                      rowText,
+                    ]
+                      .filter(Boolean)
+                      .join("\n")
+                  );
+
+                  if (statusBody.status === "completed") {
+                    if (!statusBody.result) throw new Error("Import abgeschlossen, aber Ergebnis fehlt.");
+                    return statusBody.result;
+                  }
+                  if (statusBody.status === "failed") {
+                    throw new Error(statusBody.error || statusBody.message || "Kilometer-Datenimport fehlgeschlagen.");
+                  }
+
+                  await sleep(1000);
+                }
+              }
+            );
             renderFabricStatus({
               exists: true,
               year: payload.year,
+              table_name: payload.table_name,
               row_count: payload.row_count,
               refreshed_at: payload.refreshed_at,
               sqlite_path: payload.sqlite_path,
             });
-            setStatus(`Fabric-Import erfolgreich: ${payload.row_count} Zeilen für ${payload.year}.`, "ok");
+            await loadCurrentState();
+            setStatus(`Kilometer-Datenimport erfolgreich: ${payload.row_count} Zeilen in ${payload.table_name} (${payload.year}).`, "ok");
           } catch (err) {
-            setStatus(err.message || "Fabric-Import fehlgeschlagen.", "err");
+            const message = String(err && err.message ? err.message : "");
+            if (message.toLowerCase().includes("failed to fetch") || message.toLowerCase().includes("networkerror")) {
+              setStatus("Verbindung zum lokalen Server fehlgeschlagen. Bitte Seite neu laden und erneut starten.", "err");
+            } else {
+              setStatus(message || "Kilometer-Datenimport fehlgeschlagen.", "err");
+            }
           } finally {
-            createBtn.disabled = false;
-            createSpecialBtn.disabled = false;
-            fabricImportBtn.disabled = false;
+            setActionState(false);
           }
         };
 
-        refreshBtn.addEventListener("click", refresh);
-        createBtn.addEventListener("click", createSettlement);
-        createSpecialBtn.addEventListener("click", createSpecialSettlement);
+        const importBillingData = async () => {
+          const year = currentYear();
+          yearInput.value = String(year);
+          setActionState(true);
+          setStatus("Abrechnungsdaten-Import läuft ...", "");
+          try {
+            const payload = await withLoading(
+              "Abrechnungsdaten importieren",
+              "Bitte warten, die Abrechnungsdaten werden verarbeitet.",
+              async () => {
+                const resp = await fetch(api(`/api/mehrkilometer/vertragsexcel/import?year=${encodeURIComponent(year)}`), {
+                  method: "POST",
+                });
+                const body = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(body.detail || "Abrechnungsdaten-Import fehlgeschlagen.");
+                return body;
+              }
+            );
+            await loadCurrentState();
+            setStatus(payload.detail || "Abrechnungsdaten-Import erfolgreich.", "ok");
+          } catch (err) {
+            setStatus(err.message || "Abrechnungsdaten-Import fehlgeschlagen.", "err");
+          } finally {
+            setActionState(false);
+          }
+        };
+
         fabricImportBtn.addEventListener("click", importFabricData);
-        setStatus("Bereit. Daten werden erst nach Klick auf 'Dateien aktualisieren' geladen.", "ok");
+        contractImportBtn.addEventListener("click", importBillingData);
+        setStatus("Bereit. Wähle ein Jahr und starte einen Import.", "ok");
+        loadCurrentState().catch((err) => {
+          setStatus(err.message || "Datenstand konnte nicht geladen werden.", "warn");
+        });
       })();
     </script>
   </body>

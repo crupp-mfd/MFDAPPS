@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MFD Automation</title>
     <link rel="stylesheet" href="./ids-enterprise.css?v=2" />
-    <link rel="stylesheet" href="./styles.css?v=45" />
+    <link rel="stylesheet" href="./styles.css?v=53" />
   </head>
   <body data-default-module="rsrd2">
     <div id="loaderOverlay" class="loader-overlay hidden">
@@ -44,9 +44,7 @@
     <header class="m3-header">
       <div class="header-left">
         <div class="menu-wrapper">
-          <button class="menu-btn" id="mainMenuBtn" aria-label="Menü">
-            <span></span><span></span><span></span>
-          </button>
+          <button class="menu-btn" id="mainMenuBtn" aria-label="Home / Menü">HOME</button>
           <div class="menu-dropdown hidden" id="mainMenu">
             <button type="button" class="menu-item" data-module="sparepart">1. Objektstrukturtausch</button>
             <button type="button" class="menu-item menu-item--active" data-module="rsrd2">2. RSRD2 Sync</button>
@@ -268,6 +266,8 @@
               <button id="rsrd2LoadErpFullBtn" class="ids-button tertiary" type="button">Wagenattribute aus ERP laden</button>
               <button id="rsrd2FetchJsonBtn" class="ids-button tertiary" type="button">JSON aus RSRD laden</button>
               <button id="rsrd2ProcessJsonBtn" class="ids-button primary" type="button">JSON verarbeiten</button>
+              <button id="rsrd2DocumentsBtn" class="ids-button tertiary" type="button">Dokumente</button>
+              <button id="rsrd2CompareBtn" class="ids-button tertiary" type="button">Alle prüfen</button>
             </div>
           </div>
 
@@ -304,6 +304,20 @@
               <input id="rsrd2FilterUic" type="text" placeholder="Suche ..." autocomplete="off" list="rsrd2FilterUicOptions" />
               <datalist id="rsrd2FilterUicOptions"></datalist>
             </label>
+            <label>
+              <span>Abweichungen</span>
+              <select id="rsrd2FilterDiffCount" aria-label="Abweichungen">
+                <option value="">Alle</option>
+              </select>
+            </label>
+            <label>
+              <span>Sync Docs</span>
+              <select id="rsrd2FilterDocs" aria-label="Sync Docs">
+                <option value="">Alle</option>
+                <option value="yes">Ja</option>
+                <option value="no">Nein</option>
+              </select>
+            </label>
             <label class="rsrd2-filter-inline">
               <span>Status</span>
               <div class="rsrd2-filter-inline-controls">
@@ -328,21 +342,9 @@
                 <div class="rsrd2-bulk-control">
                   <select id="rsrd2BulkData" class="rsrd2-env-select">
                     <option value="N">N</option>
-                    <option value="T">T</option>
-                    <option value="P">P</option>
+                    <option value="J">J</option>
                   </select>
                   <button id="rsrd2BulkDataBtn" class="ids-button tertiary" type="button">Setzen</button>
-                </div>
-              </label>
-              <label>
-                <span>Sync KM</span>
-                <div class="rsrd2-bulk-control">
-                  <select id="rsrd2BulkKm" class="rsrd2-env-select">
-                    <option value="N">N</option>
-                    <option value="T">T</option>
-                    <option value="P">P</option>
-                  </select>
-                  <button id="rsrd2BulkKmBtn" class="ids-button tertiary" type="button">Setzen</button>
                 </div>
               </label>
               <label>
@@ -350,8 +352,7 @@
                 <div class="rsrd2-bulk-control">
                   <select id="rsrd2BulkDocs" class="rsrd2-env-select">
                     <option value="N">N</option>
-                    <option value="T">T</option>
-                    <option value="P">P</option>
+                    <option value="J">J</option>
                   </select>
                   <button id="rsrd2BulkDocsBtn" class="ids-button tertiary" type="button">Setzen</button>
                 </div>
@@ -399,9 +400,10 @@
                   <th>Wagen Typ</th>
                   <th>Halter</th>
                   <th>Sync Daten</th>
-                  <th>Sync KM</th>
                   <th>Sync Docs</th>
+                  <th>Dokumente</th>
                   <th>1x Übertragen</th>
+                  <th>Abweichungen</th>
                   <th>Vergleichen</th>
                 </tr>
               </thead>
@@ -479,6 +481,6 @@
       </div>
     </div>
     <script src="./api-config.js?v=2"></script>
-    <script src="./app.js?v=47" type="module"></script>
+    <script src="./app.js?v=51" type="module"></script>
   </body>
 </html>

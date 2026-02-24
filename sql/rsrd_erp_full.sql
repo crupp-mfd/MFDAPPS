@@ -9,11 +9,34 @@ WITH TextLookup AS (
     ) t
     WHERE rn = 1
 ),
+TsiTextLookup AS (
+    SELECT
+        TXID,
+        COALESCE(MAX(CASE WHEN LINO = 1 THEN TX60 END), '') ||
+        COALESCE(MAX(CASE WHEN LINO = 2 THEN TX60 END), '') ||
+        COALESCE(MAX(CASE WHEN LINO = 3 THEN TX60 END), '') ||
+        COALESCE(MAX(CASE WHEN LINO = 4 THEN TX60 END), '') ||
+        COALESCE(MAX(CASE WHEN LINO = 5 THEN TX60 END), '') AS TX60
+    FROM (
+        SELECT
+            TXID,
+            LINO,
+            TX60,
+            ROW_NUMBER() OVER (PARTITION BY TXID, LINO ORDER BY Timestamp DESC) AS rn
+        FROM MSYTXL
+        WHERE LINO BETWEEN 1 AND 5
+    ) t
+    WHERE rn = 1
+    GROUP BY TXID
+),
 RawJoin AS (
     SELECT
         A.ATNR,
         A.ATID,
         CASE
+            WHEN A.ATID = 'WG-TSI_ZUS_ZERT'
+                 AND COALESCE(A.TXID, 0) > 0
+                 AND COALESCE(TsiTxt.TX60, '') <> '' THEN TsiTxt.TX60
             WHEN COALESCE(A.ATVA, '') <> '' THEN A.ATVA
             WHEN COALESCE(A.TXID, 0) > 0 THEN Txt.TX60
             ELSE CAST(A.ATVN AS VARCHAR(100))
@@ -21,6 +44,7 @@ RawJoin AS (
         COALESCE(M.HISN, A.BANO) AS Final_SERN
     FROM MIATTR A
     LEFT JOIN TextLookup Txt ON A.TXID = Txt.TXID
+    LEFT JOIN TsiTextLookup TsiTxt ON A.TXID = TsiTxt.TXID
     LEFT JOIN MROUHI M
         ON A.ITNO = M.ITNO
         AND A.BANO = M.SERN

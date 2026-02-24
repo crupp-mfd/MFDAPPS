@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AppExcelImport</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 2rem;
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+        background: #f6f9fc;
+        color: #16324a;
+      }
+      main {
+        max-width: 900px;
+        margin: 0 auto;
+        background: #ffffff;
+        border: 1px solid #d8e4f0;
+        border-radius: 14px;
+        padding: 1.25rem 1.5rem;
+      }
+      h1 {
+        margin-top: 0;
+      }
+      code {
+        background: #eef3f9;
+        padding: 0.1rem 0.3rem;
+        border-radius: 4px;
+      }
+      ul {
+        line-height: 1.6;
+      }
+      a {
+        color: #0d6efd;
+      }
+      .actions {
+        margin: 1rem 0 0.75rem;
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .actions-primary {
+        margin-bottom: 0.35rem;
+      }
+      .actions-export {
+        margin-top: 0;
+      }
+      .snapshot-label {
+        font-weight: 700;
+        color: #244a6c;
+      }
+      #go-btn,
+      #export-btn {
+        border: 0;
+        border-radius: 10px;
+        padding: 0.65rem 1.1rem;
+        background: #0d6efd;
+        color: #ffffff;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      #export-btn {
+        background: #198754;
+      }
+      #go-btn:disabled,
+      #export-btn:disabled {
+        opacity: 0.7;
+        cursor: default;
+      }
+      #snapshot-input {
+        border: 1px solid #bfd0e2;
+        border-radius: 8px;
+        padding: 0.55rem 0.65rem;
+        min-width: 220px;
+      }
+      #go-status {
+        white-space: pre-wrap;
+        background: #eef3f9;
+        border-radius: 8px;
+        padding: 0.65rem 0.8rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 0.85rem;
+      }
+      #download-link {
+        margin-top: 0.55rem;
+        font-weight: 700;
+      }
+      .status-overlay {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(4, 20, 36, 0.48);
+        z-index: 9999;
+      }
+      .status-overlay.hidden {
+        display: none;
+      }
+      .status-modal {
+        width: min(560px, calc(100vw - 2rem));
+        background: #ffffff;
+        border: 1px solid #bfd0e2;
+        border-radius: 14px;
+        box-shadow: 0 24px 64px rgba(10, 30, 52, 0.25);
+        padding: 1rem 1.1rem;
+      }
+      .status-head {
+        display: flex;
+        align-items: center;
+        gap: 0.7rem;
+      }
+      .status-spinner {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        border: 3px solid #d7e4f2;
+        border-top-color: #0d6efd;
+        animation: spin 0.8s linear infinite;
+        flex: 0 0 auto;
+      }
+      .status-spinner.hidden {
+        display: none;
+      }
+      .status-title {
+        margin: 0;
+        font-size: 1.05rem;
+      }
+      .status-message {
+        margin: 0.65rem 0 0;
+        font-weight: 700;
+      }
+      .status-detail {
+        margin: 0.35rem 0 0;
+        color: #35516b;
+        font-size: 0.92rem;
+      }
+      .status-actions {
+        margin-top: 0.8rem;
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.6rem;
+      }
+      .status-close-btn {
+        border: 0;
+        border-radius: 8px;
+        padding: 0.48rem 0.85rem;
+        background: #0d6efd;
+        color: #ffffff;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .status-close-btn.hidden {
+        display: none;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>AppExcelImport</h1>
+      <p>Grundstruktur fuer den Import komplexer Excel-Dateien in eine Datenbank.</p>
+      <p>Betrieb ueber Hauptserver: <code>http://127.0.0.1:8000</code></p>
+      <div class="actions actions-primary">
+        <button id="go-btn" type="button">GO</button>
+      </div>
+      <div class="actions actions-export">
+        <label class="snapshot-label" for="snapshot-input">Snapshot-Datum:</label>
+        <input id="snapshot-input" type="date" />
+        <button id="export-btn" type="button">Excel Export</button>
+      </div>
+      <div id="go-status">Bereit. Klicke GO fuer den Import nach Fabric.</div>
+      <div id="download-link"></div>
+      <h2>API-Endpunkte</h2>
+      <ul>
+        <li><a href="/api/excel-import/go/fabric">/api/excel-import/go/fabric</a></li>
+        <li><a href="/api/excel-import/export/cm/jobs">/api/excel-import/export/cm/jobs</a></li>
+        <li><a href="/api/excel-import/transfer/test">/api/excel-import/transfer/test</a></li>
+        <li><a href="/healthz">/healthz</a></li>
+        <li><a href="/api/excel-import/config/health">/api/excel-import/config/health</a></li>
+        <li><a href="/api/excel-import/workbook/preview">/api/excel-import/workbook/preview</a></li>
+        <li><a href="/api/excel-import/sharepoint/workbook/preview">/api/excel-import/sharepoint/workbook/preview</a></li>
+      </ul>
+      <p><a href="/">Zurueck zum Portal</a></p>
+    </main>
+    <div id="status-overlay" class="status-overlay hidden" role="dialog" aria-modal="true" aria-live="polite">
+      <div class="status-modal">
+        <div class="status-head">
+          <div id="status-spinner" class="status-spinner"></div>
+          <h2 id="status-title" class="status-title">Verarbeitung laeuft</h2>
+        </div>
+        <p id="status-message" class="status-message"></p>
+        <p id="status-detail" class="status-detail"></p>
+        <div class="status-actions">
+          <button id="status-close-btn" class="status-close-btn hidden" type="button">Schliessen</button>
+        </div>
+      </div>
+    </div>
+    <script>
+      const goButton = document.getElementById("go-btn");
+      const exportButton = document.getElementById("export-btn");
+      const goStatus = document.getElementById("go-status");
+      const snapshotInput = document.getElementById("snapshot-input");
+      const downloadLink = document.getElementById("download-link");
+      const statusOverlay = document.getElementById("status-overlay");
+      const statusSpinner = document.getElementById("status-spinner");
+      const statusTitle = document.getElementById("status-title");
+      const statusMessage = document.getElementById("status-message");
+      const statusDetail = document.getElementById("status-detail");
+      const statusCloseBtn = document.getElementById("status-close-btn");
+      let goTickerTimer = null;
+
+      function openStatusModal({ title, message, detail = "" }) {
+        statusTitle.textContent = title;
+        statusMessage.textContent = message;
+        statusDetail.textContent = detail;
+        statusSpinner.classList.remove("hidden");
+        statusCloseBtn.classList.add("hidden");
+        statusOverlay.classList.remove("hidden");
+      }
+
+      function updateStatusModal({ message, detail }) {
+        if (message !== undefined) {
+          statusMessage.textContent = message;
+        }
+        if (detail !== undefined) {
+          statusDetail.textContent = detail;
+        }
+      }
+
+      function finishStatusModal({ ok, message, detail = "", autoCloseMs = 1200 }) {
+        statusMessage.textContent = message;
+        statusDetail.textContent = detail;
+        statusSpinner.classList.add("hidden");
+        statusCloseBtn.classList.remove("hidden");
+        statusCloseBtn.style.background = ok ? "#198754" : "#b02a37";
+        if (autoCloseMs > 0) {
+          window.setTimeout(() => {
+            closeStatusModal();
+          }, autoCloseMs);
+        }
+      }
+
+      function closeStatusModal() {
+        statusOverlay.classList.add("hidden");
+      }
+
+      function startGoTicker() {
+        const goMessages = [
+          "Verbindung zur API wird aufgebaut ...",
+          "Excel-Daten werden eingelesen ...",
+          "Delta-Import in Fabric wird ausgefuehrt ...",
+          "Rueckmeldung vom Server wird verarbeitet ...",
+        ];
+        let index = 0;
+        if (goTickerTimer) {
+          window.clearInterval(goTickerTimer);
+        }
+        updateStatusModal({ message: goMessages[0] });
+        goTickerTimer = window.setInterval(() => {
+          index += 1;
+          updateStatusModal({ message: goMessages[index % goMessages.length] });
+        }, 1300);
+      }
+
+      function stopGoTicker() {
+        if (goTickerTimer) {
+          window.clearInterval(goTickerTimer);
+          goTickerTimer = null;
+        }
+      }
+
+      function resolveApiCandidates() {
+        return ["/api/excel-import"];
+      }
+
+      async function runGoTest() {
+        goButton.disabled = true;
+        downloadLink.textContent = "";
+        goStatus.textContent = "Importiere nach Fabric...";
+        openStatusModal({
+          title: "GO Import nach Fabric",
+          message: "Import wird gestartet ...",
+          detail: "Bitte warten. Der Import kann je nach Dateigroesse einige Zeit dauern.",
+        });
+        startGoTicker();
+        const endpoints = resolveApiCandidates().map((base) => `${base}/go/fabric`);
+        try {
+          let response = null;
+          let payload = null;
+          let usedEndpoint = "";
+          let lastNetworkError = "";
+
+          for (let i = 0; i < endpoints.length; i += 1) {
+            const endpoint = endpoints[i];
+            try {
+              response = await fetch(endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+              });
+              usedEndpoint = endpoint;
+              try {
+                payload = await response.json();
+              } catch {
+                payload = null;
+              }
+              // Wenn wir auf dem Hauptserver landen (typisch 404/405), naechsten Kandidaten probieren.
+              if ((response.status === 404 || response.status === 405) && i < endpoints.length - 1) {
+                response = null;
+                payload = null;
+                continue;
+              }
+              break;
+            } catch (error) {
+              lastNetworkError = String(error && error.message ? error.message : error);
+            }
+          }
+
+          if (!response) {
+            throw new Error(
+              `API nicht erreichbar. Letzter Fehler: ${lastNetworkError || "Netzwerkfehler"}`
+            );
+          }
+
+          if (!response.ok) {
+            const detail = payload && payload.detail ? payload.detail : `HTTP ${response.status}`;
+            throw new Error(`${detail} (Endpoint: ${usedEndpoint})`);
+          }
+
+          goStatus.textContent =
+            `OK\n` +
+            `Endpoint: ${usedEndpoint}\n` +
+            `Start: ${payload.started_at_utc}\n` +
+            `Ende: ${payload.finished_at_utc}\n` +
+            `Import-Zeit: ${payload.import_timestamp_utc}\n` +
+            `Datei: ${payload.workbook_path}\n` +
+            `Sheet: ${payload.sheet_name}\n` +
+            `Raw: ${payload.raw_table}\n` +
+            `Ziel: ${payload.target_table}\n` +
+            `Batch: ${payload.batch_id}\n` +
+            `Input-Zeilen: ${payload.input_rows}\n` +
+            `Unique-Keys: ${payload.deduplicated_rows}\n` +
+            `Raw geschrieben: ${payload.raw_inserted_rows}\n` +
+            `Neu (Clean): ${payload.clean_new_rows}\n` +
+            `Unveraendert (Clean): ${payload.clean_unchanged_rows}\n` +
+            `Historisiert (Clean): ${payload.clean_closed_rows}`;
+          finishStatusModal({
+            ok: true,
+            message: "GO Import erfolgreich abgeschlossen.",
+            detail: `Batch: ${payload.batch_id} | Input-Zeilen: ${payload.input_rows}`,
+          });
+        } catch (error) {
+          goStatus.textContent =
+            `Fehler: ${error.message}\n` +
+            `Hinweis: API/ENV/Fabric-Konfiguration pruefen.`;
+          finishStatusModal({
+            ok: false,
+            message: "GO Import fehlgeschlagen.",
+            detail: String(error && error.message ? error.message : error),
+            autoCloseMs: 0,
+          });
+        } finally {
+          stopGoTicker();
+          goButton.disabled = false;
+        }
+      }
+
+      async function runExport() {
+        exportButton.disabled = true;
+        downloadLink.textContent = "";
+        goStatus.textContent = "Export-Job wird gestartet ...";
+        openStatusModal({
+          title: "Excel Export",
+          message: "Export-Job wird gestartet ...",
+          detail: "Bitte warten. Der Snapshot wird aus Fabric gelesen und als Excel erzeugt.",
+        });
+        const endpoints = resolveApiCandidates();
+        const rawSnapshot = String(snapshotInput.value || "").trim();
+        const query = rawSnapshot ? `?snapshot_at_utc=${encodeURIComponent(rawSnapshot)}` : "";
+        try {
+          let response = null;
+          let payload = null;
+          let usedEndpoint = "";
+          let lastNetworkError = "";
+
+          for (let i = 0; i < endpoints.length; i += 1) {
+            const endpoint = `${endpoints[i]}/export/cm/jobs${query}`;
+            try {
+              response = await fetch(endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+              });
+              usedEndpoint = endpoint;
+              try {
+                payload = await response.json();
+              } catch {
+                payload = null;
+              }
+              if ((response.status === 404 || response.status === 405) && i < endpoints.length - 1) {
+                response = null;
+                payload = null;
+                continue;
+              }
+              break;
+            } catch (error) {
+              lastNetworkError = String(error && error.message ? error.message : error);
+            }
+          }
+
+          if (!response) {
+            throw new Error(
+              `API nicht erreichbar. Letzter Fehler: ${lastNetworkError || "Netzwerkfehler"}`
+            );
+          }
+          if (!response.ok) {
+            const detail = payload && payload.detail ? payload.detail : `HTTP ${response.status}`;
+            throw new Error(`${detail} (Endpoint: ${usedEndpoint})`);
+          }
+
+          const jobId = payload.job_id;
+          if (!jobId) {
+            throw new Error("Kein Export-Job-ID vom Server erhalten.");
+          }
+          await pollExportJob({
+            apiBase: endpoints[0],
+            jobId,
+            startEndpoint: usedEndpoint,
+          });
+        } catch (error) {
+          goStatus.textContent =
+            `Fehler: ${error.message}\n` +
+            `Hinweis: API/ENV/Fabric-Konfiguration pruefen.`;
+          finishStatusModal({
+            ok: false,
+            message: "Excel Export fehlgeschlagen.",
+            detail: String(error && error.message ? error.message : error),
+            autoCloseMs: 0,
+          });
+        } finally {
+          exportButton.disabled = false;
+        }
+      }
+
+      async function pollExportJob({ apiBase, jobId, startEndpoint }) {
+        const statusEndpoint = `${apiBase}/export/cm/jobs/${encodeURIComponent(jobId)}`;
+        const maxChecks = 600;
+        for (let attempt = 1; attempt <= maxChecks; attempt += 1) {
+          const response = await fetch(statusEndpoint, { method: "GET" });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) {
+            const detail = payload && payload.detail ? payload.detail : `HTTP ${response.status}`;
+            throw new Error(`${detail} (Endpoint: ${statusEndpoint})`);
+          }
+
+          const totalRows = payload.total_rows || 0;
+          const exportedRows = payload.exported_rows || 0;
+          updateStatusModal({
+            message: payload.message || "Export laeuft ...",
+            detail: `Snapshot: ${payload.effective_snapshot_utc || "-"} | Ziel: ${payload.target_table}`,
+          });
+
+          goStatus.textContent =
+            `Export-Job: ${payload.job_id}\n` +
+            `Start-Endpoint: ${startEndpoint}\n` +
+            `Status: ${payload.status}\n` +
+            `Meldung: ${payload.message}\n` +
+            `Ziel: ${payload.target_table}\n` +
+            `Snapshot: ${payload.effective_snapshot_utc || "-"}\n` +
+            `Fortschritt: ${exportedRows}/${totalRows || "?"} Zeilen`;
+
+          if (payload.status === "completed") {
+            const downloadUrl = payload.download_url;
+            if (downloadUrl) {
+              downloadLink.textContent = "";
+              const anchor = document.createElement("a");
+              anchor.href = downloadUrl;
+              anchor.target = "_blank";
+              anchor.rel = "noopener";
+              anchor.textContent = "Excel herunterladen";
+              downloadLink.appendChild(anchor);
+              if (payload.workbook_path) {
+                const pathLine = document.createElement("div");
+                pathLine.textContent = `Datei: ${payload.workbook_path}`;
+                downloadLink.appendChild(pathLine);
+              }
+            } else if (payload.workbook_path) {
+              downloadLink.textContent = `Datei: ${payload.workbook_path}`;
+            }
+            finishStatusModal({
+              ok: true,
+              message: "Excel Export abgeschlossen.",
+              detail: payload.workbook_path ? `Datei: ${payload.workbook_path}` : "Die Datei steht zum Download bereit.",
+            });
+            return;
+          }
+          if (payload.status === "failed") {
+            throw new Error(payload.error || "Export fehlgeschlagen.");
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+        throw new Error(`Export-Job Timeout (${jobId}).`);
+      }
+
+      goButton.addEventListener("click", runGoTest);
+      exportButton.addEventListener("click", runExport);
+      statusCloseBtn.addEventListener("click", closeStatusModal);
+    </script>
+  </body>
+</html>

@@ -92,6 +92,7 @@ RSRD_API_PREFIXES = (
     "/api/objstrk",
     "/api/renumber",
     "/api/teilenummer",
+    "/api/datalake-sync",
 )
 FABRIC_REQUIRED_ENV_VARS = (
     "FABRIC_SQL_SERVER",
@@ -376,6 +377,18 @@ def _connect_fabric_sql():
         ) from exc
 
     timeout = int((os.environ.get("FABRIC_SQL_TIMEOUT") or "20").strip())
+    connect_retries_raw = (os.environ.get("FABRIC_SQL_CONNECT_RETRIES") or "3").strip()
+    retry_delay_raw = (os.environ.get("FABRIC_SQL_RETRY_DELAY_SEC") or "1.5").strip()
+    try:
+        connect_retries = int(connect_retries_raw)
+    except ValueError:
+        connect_retries = 3
+    try:
+        retry_delay = float(retry_delay_raw)
+    except ValueError:
+        retry_delay = 1.5
+    connect_retries = max(1, min(8, connect_retries))
+    retry_delay = max(0.2, min(15.0, retry_delay))
     driver = (os.environ.get("FABRIC_SQL_DRIVER") or "ODBC Driver 18 for SQL Server").strip()
     conn_str = (
         f"Driver={{{driver}}};"
@@ -388,10 +401,27 @@ def _connect_fabric_sql():
         f"UID={os.environ['FABRIC_CLIENT_ID'].strip()};"
         f"PWD={os.environ['FABRIC_CLIENT_SECRET'].strip()};"
     )
-    try:
-        return pyodbc.connect(conn_str, timeout=timeout)
-    except Exception as exc:
-        raise RuntimeError(f"Fabric SQL Verbindung fehlgeschlagen: {exc}") from exc
+    last_exc = None
+    for attempt in range(1, connect_retries + 1):
+        try:
+            return pyodbc.connect(conn_str, timeout=timeout)
+        except Exception as exc:
+            last_exc = exc
+            message = str(exc).lower()
+            transient = (
+                "hyt00" in message
+                or "login timeout expired" in message
+                or "08001" in message
+                or "network-related" in message
+            )
+            if not transient or attempt >= connect_retries:
+                break
+            sleep_seconds = retry_delay * attempt
+            time.sleep(sleep_seconds)
+    raise RuntimeError(
+        f"Fabric SQL Verbindung fehlgeschlagen: {last_exc} "
+        f"(Versuche: {connect_retries}, Timeout je Versuch: {timeout}s)"
+    ) from last_exc
 
 
 def _fabric_health_check() -> dict:
@@ -415,34 +445,25 @@ def _fetch_stagli_scnm(limit: int) -> list[str]:
         return ["" if row[0] is None else str(row[0]) for row in rows]
 
 
+def _mehr_fabric_table_name(year: int) -> str:
+    safe_year = max(2000, min(3000, int(year)))
+    return f"Mehr_Kiloemter_{safe_year}"
+
+
+def _sqlite_table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
 def _ensure_mehr_fabric_sqlite_schema(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS mehrkilometer_fabric_results (
-            year INTEGER NOT NULL,
-            kundennummer TEXT,
-            kundenname TEXT,
-            vertragsnummer TEXT,
-            vertragsposition INTEGER,
-            seriennummer TEXT,
-            vertragsstart INTEGER,
-            vertragsende INTEGER,
-            abrechnungstart INTEGER,
-            abrechnungsende INTEGER,
-            km_start_datum_echt INTEGER,
-            km_ende_datum_echt INTEGER,
-            km_abrechnungstart REAL,
-            km_abrechnungsende REAL,
-            km_differenz REAL,
-            km_daten_ok INTEGER,
-            loaded_at TEXT NOT NULL
-        )
-        """
-    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS mehrkilometer_fabric_status (
             year INTEGER PRIMARY KEY,
+            table_name TEXT NOT NULL,
             row_count INTEGER NOT NULL,
             refreshed_at TEXT NOT NULL,
             sqlite_path TEXT NOT NULL,
@@ -450,12 +471,13 @@ def _ensure_mehr_fabric_sqlite_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_mehrkilometer_fabric_results_year
-        ON mehrkilometer_fabric_results (year)
-        """
-    )
+    status_columns = {
+        str(row[1]).lower() for row in conn.execute("PRAGMA table_info(mehrkilometer_fabric_status)")
+    }
+    if "table_name" not in status_columns:
+        conn.execute(
+            "ALTER TABLE mehrkilometer_fabric_status ADD COLUMN table_name TEXT NOT NULL DEFAULT ''"
+        )
 
 
 def _build_mehrkilometer_fabric_sql(year: int) -> str:
@@ -592,12 +614,31 @@ LEFT JOIN ende_km e ON e.vertrag_id = v.vertrag_id
 """
 
 
-def _refresh_mehrkilometer_fabric_sqlite(year: int) -> dict:
+def _refresh_mehrkilometer_fabric_sqlite(year: int, progress=None) -> dict:
+    def _emit(stage: str, message: str, rows_total: int | None = None, rows_written: int | None = None) -> None:
+        if progress is None:
+            return
+        payload = {
+            "stage": stage,
+            "message": message,
+        }
+        if rows_total is not None:
+            payload["rows_total"] = int(rows_total)
+        if rows_written is not None:
+            payload["rows_written"] = int(rows_written)
+        try:
+            progress(payload)
+        except Exception:
+            # Progress reporting must never break the import flow.
+            pass
+
     query = _build_mehrkilometer_fabric_sql(year)
+    _emit("query_start", "Fabric SQL wird ausgeführt ...")
     with _connect_fabric_sql() as conn:
         cur = conn.cursor()
         cur.execute(query)
         rows = cur.fetchall()
+    _emit("query_done", "Fabric SQL abgeschlossen.", rows_total=len(rows))
 
     refreshed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     db_path = Path(os.environ.get("MEHR_FABRIC_SQLITE_PATH", str(MEHR_FABRIC_SQLITE))).resolve()
@@ -608,41 +649,90 @@ def _refresh_mehrkilometer_fabric_sqlite(year: int) -> dict:
             return float(value)
         return value
 
+    _emit("sqlite_prepare", "SQLite-Tabelle wird vorbereitet.", rows_total=len(rows))
     with sqlite3.connect(db_path) as sqlite_conn:
         _ensure_mehr_fabric_sqlite_schema(sqlite_conn)
-        sqlite_conn.execute("DELETE FROM mehrkilometer_fabric_results WHERE year = ?", (year,))
+        table_name = _mehr_fabric_table_name(year)
+        sqlite_conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+        sqlite_conn.execute(
+            f"""
+            CREATE TABLE "{table_name}" (
+                kundennummer TEXT,
+                kundenname TEXT,
+                vertragsnummer TEXT,
+                vertragsposition INTEGER,
+                seriennummer TEXT,
+                vertragsstart INTEGER,
+                vertragsende INTEGER,
+                abrechnungstart INTEGER,
+                abrechnungsende INTEGER,
+                km_start_datum_echt INTEGER,
+                km_ende_datum_echt INTEGER,
+                km_abrechnungstart REAL,
+                km_abrechnungsende REAL,
+                km_differenz REAL,
+                km_daten_ok INTEGER,
+                loaded_at TEXT NOT NULL
+            )
+            """
+        )
         insert_sql = f"""
-            INSERT INTO mehrkilometer_fabric_results (
-                year,
+            INSERT INTO "{table_name}" (
                 {", ".join(MEHR_FABRIC_COLUMNS)},
                 loaded_at
             ) VALUES (
-                ?, {", ".join(["?"] * len(MEHR_FABRIC_COLUMNS))}, ?
+                {", ".join(["?"] * len(MEHR_FABRIC_COLUMNS))}, ?
             )
         """
         payload = [
-            (year, *[_to_sqlite_value(value) for value in row], refreshed_at)
+            (*[_to_sqlite_value(value) for value in row], refreshed_at)
             for row in rows
         ]
+        chunk_size_raw = (os.environ.get("MEHR_FABRIC_INSERT_BATCH") or "500").strip()
+        try:
+            chunk_size = int(chunk_size_raw)
+        except ValueError:
+            chunk_size = 500
+        chunk_size = max(100, min(5000, chunk_size))
         if payload:
-            sqlite_conn.executemany(insert_sql, payload)
+            written = 0
+            for idx in range(0, len(payload), chunk_size):
+                chunk = payload[idx : idx + chunk_size]
+                sqlite_conn.executemany(insert_sql, chunk)
+                written += len(chunk)
+                _emit(
+                    "sqlite_insert",
+                    f"SQLite schreibt Daten ({written}/{len(payload)}) ...",
+                    rows_total=len(payload),
+                    rows_written=written,
+                )
+        else:
+            _emit(
+                "sqlite_insert",
+                "Keine Zeilen für den Import vorhanden.",
+                rows_total=0,
+                rows_written=0,
+            )
         sqlite_conn.execute(
             """
             INSERT INTO mehrkilometer_fabric_status (
-                year, row_count, refreshed_at, sqlite_path, source_query
-            ) VALUES (?, ?, ?, ?, ?)
+                year, table_name, row_count, refreshed_at, sqlite_path, source_query
+            ) VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(year) DO UPDATE SET
+                table_name=excluded.table_name,
                 row_count=excluded.row_count,
                 refreshed_at=excluded.refreshed_at,
                 sqlite_path=excluded.sqlite_path,
                 source_query=excluded.source_query
             """,
-            (year, len(rows), refreshed_at, str(db_path), query),
+            (year, table_name, len(rows), refreshed_at, str(db_path), query),
         )
         sqlite_conn.commit()
+    _emit("done", "Import abgeschlossen.", rows_total=len(rows), rows_written=len(rows))
 
     return {
         "year": year,
+        "table_name": _mehr_fabric_table_name(year),
         "row_count": len(rows),
         "refreshed_at": refreshed_at,
         "sqlite_path": str(db_path),
@@ -656,6 +746,7 @@ def _mehrkilometer_fabric_status(year: int) -> dict:
         return {
             "year": year,
             "exists": False,
+            "table_name": _mehr_fabric_table_name(year),
             "sqlite_path": str(db_path),
             "row_count": 0,
             "refreshed_at": None,
@@ -665,7 +756,7 @@ def _mehrkilometer_fabric_status(year: int) -> dict:
         _ensure_mehr_fabric_sqlite_schema(sqlite_conn)
         row = sqlite_conn.execute(
             """
-            SELECT row_count, refreshed_at, sqlite_path
+            SELECT table_name, row_count, refreshed_at, sqlite_path
             FROM mehrkilometer_fabric_status
             WHERE year = ?
             """,
@@ -675,16 +766,20 @@ def _mehrkilometer_fabric_status(year: int) -> dict:
             return {
                 "year": year,
                 "exists": False,
+                "table_name": _mehr_fabric_table_name(year),
                 "sqlite_path": str(db_path),
                 "row_count": 0,
                 "refreshed_at": None,
             }
+        table_name = str(row[0] or _mehr_fabric_table_name(year))
+        exists = _sqlite_table_exists(sqlite_conn, table_name)
         return {
             "year": year,
-            "exists": True,
-            "sqlite_path": str(row[2] or db_path),
-            "row_count": int(row[0] or 0),
-            "refreshed_at": row[1],
+            "exists": exists,
+            "table_name": table_name,
+            "sqlite_path": str(row[3] or db_path),
+            "row_count": int(row[1] or 0),
+            "refreshed_at": row[2],
         }
 
 
@@ -1236,6 +1331,23 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self._send_json({"detail": str(exc)}, status=500)
                 return
             self._send_json(payload)
+            return
+
+        if path == "/api/mehrkilometer/vertragsexcel/import":
+            year_raw = (query.get("year") or [""])[0]
+            try:
+                year = int(year_raw) if year_raw else DEFAULT_YEAR
+            except ValueError:
+                year = DEFAULT_YEAR
+            year = max(2000, min(3000, year))
+            self._send_json(
+                {
+                    "year": year,
+                    "status": "pending",
+                    "detail": "Vertragsexcel-SQL noch nicht hinterlegt. Bitte SQL liefern.",
+                },
+                status=501,
+            )
             return
 
         if path == "/api/mehrkilometer/create":

@@ -29,6 +29,7 @@ const rsrd2LoadErpBtn = document.getElementById("rsrd2LoadErpBtn");
 const rsrd2LoadErpFullBtn = document.getElementById("rsrd2LoadErpFullBtn");
 const rsrd2FetchJsonBtn = document.getElementById("rsrd2FetchJsonBtn");
 const rsrd2ProcessJsonBtn = document.getElementById("rsrd2ProcessJsonBtn");
+const rsrd2DocumentsBtn = document.getElementById("rsrd2DocumentsBtn");
 const rsrd2CompareBtn = document.getElementById("rsrd2CompareBtn");
 const rsrd2Status = document.getElementById("rsrd2Status");
 const rsrd2Log = document.getElementById("rsrd2Log");
@@ -47,6 +48,8 @@ const rsrd2FilterHalterOptions = document.getElementById("rsrd2FilterHalterOptio
 const rsrd2FilterUic = document.getElementById("rsrd2FilterUic");
 const rsrd2FilterUicOptions = document.getElementById("rsrd2FilterUicOptions");
 const rsrd2FilterStatus = document.getElementById("rsrd2FilterStatus");
+const rsrd2FilterDiffCount = document.getElementById("rsrd2FilterDiffCount");
+const rsrd2FilterDocs = document.getElementById("rsrd2FilterDocs");
 const rsrd2GoBtn = document.getElementById("rsrd2GoBtn");
 const rsrd2BulkData = document.getElementById("rsrd2BulkData");
 const rsrd2BulkDataBtn = document.getElementById("rsrd2BulkDataBtn");
@@ -349,6 +352,26 @@ const FILTER_FIELDS_BY_MODULE = {
 const resolveEnvValue = (value) => (value && value.toUpperCase() === "TEST" ? "TEST" : "LIVE");
 let currentEnv = resolveEnvValue(window.localStorage.getItem("sparepart.env") || "LIVE");
 let currentRsrdEnv = resolveEnvValue(window.localStorage.getItem("sparepart.rsrd_env") || currentEnv);
+const resolveEnvParam = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (["test", "tst", "t"].includes(normalized)) return "TEST";
+  if (["live", "prd", "p", "l"].includes(normalized)) return "LIVE";
+  return null;
+};
+{
+  const params = new URLSearchParams(window.location.search);
+  const erpFromUrl = resolveEnvParam(params.get("env"));
+  const rsrdFromUrl = resolveEnvParam(params.get("rsrd_env"));
+  if (erpFromUrl) {
+    currentEnv = erpFromUrl;
+    window.localStorage.setItem("sparepart.env", currentEnv);
+  }
+  if (rsrdFromUrl) {
+    currentRsrdEnv = rsrdFromUrl;
+    window.localStorage.setItem("sparepart.rsrd_env", currentRsrdEnv);
+  }
+}
 
 const getErpEnvParam = () => currentEnv.toLowerCase();
 const getRsrdEnvParam = () => currentRsrdEnv.toLowerCase();
@@ -2418,6 +2441,8 @@ const rsrd2Filters = () => ({
   halter: (rsrd2FilterHalter?.value || "").trim(),
   uic: (rsrd2FilterUic?.value || "").trim(),
   status: (rsrd2FilterStatus?.value || "").trim(),
+  diff_count: (rsrd2FilterDiffCount?.value || "").trim(),
+  docs: (rsrd2FilterDocs?.value || "").trim(),
 });
 
 const buildRsrd2OverviewUrl = () => {
@@ -2432,19 +2457,49 @@ const buildRsrd2OverviewUrl = () => {
   if (filters.halter) params.set("halter", filters.halter);
   if (filters.uic) params.set("uic", filters.uic);
   if (filters.status) params.set("status", filters.status);
+  if (filters.diff_count) params.set("diff_count", filters.diff_count);
+  if (filters.docs) params.set("docs", filters.docs);
   return withRsrd2Env(`/api/rsrd2/overview?${params.toString()}`);
+};
+
+const updateRsrd2DiffCountOptions = (options) => {
+  if (!rsrd2FilterDiffCount) return;
+  const currentValue = String(rsrd2FilterDiffCount.value || "");
+  const normalizedOptions = Array.isArray(options) ? options : [];
+  rsrd2FilterDiffCount.innerHTML = "";
+  const allOption = document.createElement("option");
+  allOption.value = "";
+  allOption.textContent = "Alle";
+  rsrd2FilterDiffCount.appendChild(allOption);
+  normalizedOptions.forEach((entry) => {
+    const rawValue = entry?.value;
+    if (rawValue === null || rawValue === undefined || rawValue === "") return;
+    const value = String(rawValue);
+    const countNum = Number(entry?.count);
+    const label =
+      Number.isFinite(countNum) && countNum >= 0 ? `${value} (${Math.trunc(countNum)})` : value;
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    rsrd2FilterDiffCount.appendChild(option);
+  });
+  if (Array.from(rsrd2FilterDiffCount.options).some((opt) => opt.value === currentValue)) {
+    rsrd2FilterDiffCount.value = currentValue;
+  } else {
+    rsrd2FilterDiffCount.value = "";
+  }
 };
 
 const normalizeSyncEnv = (value) => {
   const normalized = String(value || "").trim().toUpperCase();
-  if (normalized === "T" || normalized === "P") return normalized;
+  if (normalized === "J" || normalized === "T" || normalized === "P") return "J";
   return "N";
 };
 
 const applySyncEnvClass = (select, value) => {
   if (!select) return;
   const normalized = normalizeSyncEnv(value).toLowerCase();
-  select.classList.remove("rsrd2-env-select--n", "rsrd2-env-select--t", "rsrd2-env-select--p");
+  select.classList.remove("rsrd2-env-select--n", "rsrd2-env-select--j", "rsrd2-env-select--t", "rsrd2-env-select--p");
   select.classList.add(`rsrd2-env-select--${normalized}`);
 };
 
@@ -2453,8 +2508,7 @@ const createSyncEnvSelect = ({ wagonNumber, kind, value }) => {
   select.className = "rsrd2-env-select";
   [
     { value: "N", label: "N" },
-    { value: "T", label: "T" },
-    { value: "P", label: "P" },
+    { value: "J", label: "J" },
   ].forEach((option) => {
     const opt = document.createElement("option");
     opt.value = option.value;
@@ -2578,7 +2632,7 @@ const renderRsrd2Overview = () => {
   if (!rsrd2OverviewRows.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 9;
+    cell.colSpan = 10;
     cell.textContent = "Keine Daten gefunden.";
     row.appendChild(cell);
     rsrd2TableBody.appendChild(row);
@@ -2602,17 +2656,29 @@ const renderRsrd2Overview = () => {
       );
       tr.appendChild(syncDataCell);
 
-      const syncKmCell = document.createElement("td");
-      syncKmCell.appendChild(
-        createSyncEnvSelect({ wagonNumber, kind: "km", value: row.sync_km_env }),
-      );
-      tr.appendChild(syncKmCell);
-
       const syncDocsCell = document.createElement("td");
       syncDocsCell.appendChild(
         createSyncEnvSelect({ wagonNumber, kind: "docs", value: row.sync_docs_env }),
       );
       tr.appendChild(syncDocsCell);
+
+      const docsCell = document.createElement("td");
+      const docsItems = Array.isArray(row.sync_docs_items) ? row.sync_docs_items : [];
+      if (!docsItems.length) {
+        docsCell.textContent = "-";
+      } else {
+        const docsList = document.createElement("div");
+        docsList.className = "rsrd2-doc-list";
+        docsItems.forEach((docName) => {
+          const item = document.createElement("div");
+          item.className = "rsrd2-doc-item";
+          item.textContent = String(docName || "");
+          item.title = String(docName || "");
+          docsList.appendChild(item);
+        });
+        docsCell.appendChild(docsList);
+      }
+      tr.appendChild(docsCell);
 
       const uploadCell = document.createElement("td");
       const uploadWrap = document.createElement("label");
@@ -2632,7 +2698,7 @@ const renderRsrd2Overview = () => {
       uploadCheckbox.addEventListener("change", async () => {
         const enabled = uploadCheckbox.checked;
         try {
-          const resp = await fetch(withErpEnv("/api/rsrd2/one_time_transfer"), {
+          const resp = await fetch(withRsrd2Env("/api/rsrd2/one_time_transfer"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ wagon: wagonNumber, enabled }),
@@ -2655,6 +2721,16 @@ const renderRsrd2Overview = () => {
       uploadWrap.appendChild(uploadCheckbox);
       uploadCell.appendChild(uploadWrap);
       tr.appendChild(uploadCell);
+
+      const diffCell = document.createElement("td");
+      const diffCount = Number(row.diff_count);
+      if (Number.isFinite(diffCount) && diffCount >= 0) {
+        diffCell.textContent = String(diffCount);
+        if (diffCount > 0) diffCell.classList.add("rsrd2-diff-count");
+      } else {
+        diffCell.textContent = "-";
+      }
+      tr.appendChild(diffCell);
 
       const compareCell = document.createElement("td");
       const compareLink = document.createElement("a");
@@ -2689,6 +2765,7 @@ const loadRsrd2Overview = async (force = false) => {
   if (rsrd2OverviewLoaded && !force) return;
   try {
     const data = await fetchJSON(buildRsrd2OverviewUrl());
+    updateRsrd2DiffCountOptions(data.diff_count_options);
     rsrd2OverviewRows = Array.isArray(data.rows) ? data.rows : [];
     rsrd2OverviewTotal = data.total || 0;
     rsrd2OverviewLoaded = true;
@@ -2915,13 +2992,6 @@ const processRsrdJson = async () => {
   });
 };
 
-const formatDiffValue = (value) => {
-  if (value === null || value === undefined || value === "") return "leer";
-  if (Array.isArray(value)) return value.join(", ");
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-};
-
 const formatWagonSerial = (value) => {
   if (!value) return "-";
   const digits = String(value).replace(/\\D/g, "");
@@ -2930,18 +3000,6 @@ const formatWagonSerial = (value) => {
   }
   return String(value);
 };
-
-const extractRsrdFieldName = (uploadField, fallback) => {
-  if (!uploadField) return fallback || "n/a";
-  const parts = uploadField.split("/");
-  let last = parts[parts.length - 1] || "";
-  if (last.includes("(")) {
-    last = last.split("(")[0];
-  }
-  return last || fallback || "n/a";
-};
-
-const DEBUG_RSRD_COMPARE_WAGONS = ["378445949472"];
 
 const compareRsrdData = async () => {
   if (!rsrd2Status) return;
@@ -2966,8 +3024,6 @@ const compareRsrdData = async () => {
   try {
     const resp = await fetch(withRsrd2Env("/api/rsrd2/compare?create_upload=true"), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ wagons: DEBUG_RSRD_COMPARE_WAGONS }),
     });
     if (!resp.ok) {
       const message = await parseErrorResponse(resp);
@@ -2978,32 +3034,10 @@ const compareRsrdData = async () => {
     const withDiffs = rows.filter((row) => (row.diff_count || 0) > 0);
     const missing = rows.filter((row) => row.rsrd_missing);
 
-    rows.forEach((row) => {
-      const wagon = row.wagon_number_freight || "unbekannt";
-      if (row.rsrd_missing) {
-        appendRsrd2Log(`Wagen ${wagon}: keine RSRD-Daten gefunden.`, "error");
-        return;
-      }
-      const diffs = Array.isArray(row.differences) ? row.differences : [];
-      const diffCount = diffs.filter((diff) => !diff.equal).length;
-      appendRsrd2Log(`Wagen ${wagon}: ${diffCount} Abweichungen (Detailvergleich).`, "info");
-      diffs.forEach((diff) => {
-        if (diff.equal) return;
-        const erpValue = formatDiffValue(diff.erp);
-        const rsrdValue = formatDiffValue(diff.rsrd);
-        const erpField = diff.erp_field || diff.field || "n/a";
-        const uploadRequirement = diff.upload_requirement || "n/a";
-        const rsrdFieldName = extractRsrdFieldName(diff.upload_field, diff.rsrd_field || diff.field);
-        appendRsrd2Log(
-          `ERP:${erpField}=${erpValue} | RSRD:${rsrdFieldName}=${rsrdValue} | UL: ${uploadRequirement}`,
-          "error",
-        );
-      });
-    });
-
     const summary = `Prüfung abgeschlossen: ${rows.length} Wagen geprüft, ${withDiffs.length} mit Abweichungen, ${data.created ?? 0} Neuanlagen erstellt.`;
     rsrd2Status.textContent = summary;
-    appendRsrd2Log(summary, missing.length || withDiffs.length ? "success" : "info");
+    appendRsrd2Log(summary, "success");
+    await loadRsrd2Overview(true);
   } catch (error) {
     const fallback = error.message || "Prüfung fehlgeschlagen.";
     rsrd2Status.textContent = fallback;
@@ -4533,6 +4567,15 @@ if (rsrd2CompareBtn) {
     compareRsrdData();
   });
 }
+if (rsrd2DocumentsBtn) {
+  rsrd2DocumentsBtn.addEventListener("click", () => {
+    const params = new URLSearchParams({
+      env: getErpEnvParam(),
+      rsrd_env: getRsrdEnvParam(),
+    });
+    window.location.href = `rsrd2_documents.html?${params.toString()}`;
+  });
+}
 if (rsrd2UploadSelectedBtn) {
   rsrd2UploadSelectedBtn.addEventListener("click", () => {
     uploadSelectedRsrd2();
@@ -4591,6 +4634,8 @@ if (rsrd2FilterBaureihe) rsrd2FilterBaureihe.addEventListener("input", handleRsr
 if (rsrd2FilterHalter) rsrd2FilterHalter.addEventListener("input", handleRsrd2Filter);
 if (rsrd2FilterUic) rsrd2FilterUic.addEventListener("input", handleRsrd2Filter);
 if (rsrd2FilterStatus) rsrd2FilterStatus.addEventListener("change", handleRsrd2Filter);
+if (rsrd2FilterDiffCount) rsrd2FilterDiffCount.addEventListener("change", handleRsrd2Filter);
+if (rsrd2FilterDocs) rsrd2FilterDocs.addEventListener("change", handleRsrd2Filter);
 if (rsrd2FilterSern) {
   rsrd2FilterSern.addEventListener("input", (event) =>
     updateRsrd2Suggestions({ field: "sern", value: event.target.value, target: rsrd2FilterSernOptions }),
@@ -4639,6 +4684,8 @@ if (rsrd2ClearFiltersBtn) {
     if (rsrd2FilterHalter) rsrd2FilterHalter.value = "";
     if (rsrd2FilterUic) rsrd2FilterUic.value = "";
     if (rsrd2FilterStatus) rsrd2FilterStatus.value = "";
+    if (rsrd2FilterDiffCount) rsrd2FilterDiffCount.value = "";
+    if (rsrd2FilterDocs) rsrd2FilterDocs.value = "";
     if (rsrd2FilterSernOptions) rsrd2FilterSernOptions.innerHTML = "";
     if (rsrd2FilterBaureiheOptions) rsrd2FilterBaureiheOptions.innerHTML = "";
     if (rsrd2FilterHalterOptions) rsrd2FilterHalterOptions.innerHTML = "";

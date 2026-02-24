@@ -5,8 +5,14 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_FILE="${PID_FILE:-/tmp/nameflight.pid}"
 LOG_FILE="${LOG_FILE:-/tmp/nameflight.log}"
 DEFAULT_PYTHON_BIN="python3"
+if [[ -x "/Users/crupp/dev/MFDAPPS/.venv/bin/python" ]]; then
+  DEFAULT_PYTHON_BIN="/Users/crupp/dev/MFDAPPS/.venv/bin/python"
+fi
 if [[ -x "/Users/crupp/SPAREPART/.venv/bin/python" ]]; then
-  DEFAULT_PYTHON_BIN="/Users/crupp/SPAREPART/.venv/bin/python"
+  # Nur als Fallback nutzen, falls das Projekt-venv fehlt.
+  if [[ ! -x "/Users/crupp/dev/MFDAPPS/.venv/bin/python" ]]; then
+    DEFAULT_PYTHON_BIN="/Users/crupp/SPAREPART/.venv/bin/python"
+  fi
 fi
 PYTHON_BIN="${PYTHON_BIN:-${DEFAULT_PYTHON_BIN}}"
 HOST="${HOST:-127.0.0.1}"
@@ -31,6 +37,10 @@ set_runtime_env_defaults() {
   export MFDAPPS_RUNTIME_ROOT="${MFDAPPS_RUNTIME_ROOT:-${ROOT_DIR}/apps/christian/data}"
   export MFDAPPS_CREDENTIALS_DIR="${MFDAPPS_CREDENTIALS_DIR:-${ROOT_DIR}/credentials}"
   export MFDAPPS_FRONTEND_DIR="${MFDAPPS_FRONTEND_DIR:-${ROOT_DIR}}"
+  export SPAREPART_PRD_DRY_RUN="${SPAREPART_PRD_DRY_RUN:-1}"
+  export SPAREPART_TST_DRY_RUN="${SPAREPART_TST_DRY_RUN:-0}"
+  export SPAREPART_M3_CONO_PRD="${SPAREPART_M3_CONO_PRD:-860}"
+  export SPAREPART_M3_CONO_TST="${SPAREPART_M3_CONO_TST:-883}"
   mkdir -p "${MFDAPPS_RUNTIME_ROOT}" "${MFDAPPS_CREDENTIALS_DIR}"
 }
 
@@ -88,6 +98,14 @@ write_launchd_plist() {
     <string>${MFDAPPS_CREDENTIALS_DIR}</string>
     <key>MFDAPPS_FRONTEND_DIR</key>
     <string>${MFDAPPS_FRONTEND_DIR}</string>
+    <key>SPAREPART_PRD_DRY_RUN</key>
+    <string>${SPAREPART_PRD_DRY_RUN}</string>
+    <key>SPAREPART_TST_DRY_RUN</key>
+    <string>${SPAREPART_TST_DRY_RUN}</string>
+    <key>SPAREPART_M3_CONO_PRD</key>
+    <string>${SPAREPART_M3_CONO_PRD}</string>
+    <key>SPAREPART_M3_CONO_TST</key>
+    <string>${SPAREPART_M3_CONO_TST}</string>
   </dict>
 </dict>
 </plist>
@@ -334,6 +352,10 @@ Umgebungsvariablen (optional):
   PID_FILE=/tmp/nameflight.pid
   LOG_FILE=/tmp/nameflight.log
   PYTHON_BIN=python3
+  SPAREPART_PRD_DRY_RUN=1
+  SPAREPART_TST_DRY_RUN=0
+  SPAREPART_M3_CONO_PRD=860
+  SPAREPART_M3_CONO_TST=883
 EOF
 }
 

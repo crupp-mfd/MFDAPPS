@@ -190,7 +190,10 @@ const wItnoOptionsList = document.getElementById("wItnoOptions");
 const wSernFilterInput = document.getElementById("wSernFilter");
 const wSernOptionsList = document.getElementById("wSernOptions");
 const newItnoInput = document.getElementById("newItnoInput");
-const newSernInput = document.getElementById("newSernInput");
+const excelUploadInput = document.getElementById("excelUploadInput");
+const excelUploadInfo = document.getElementById("excelUploadInfo");
+const ausbauDelayInput = document.getElementById("ausbauDelayInput");
+const einbauDelayInput = document.getElementById("einbauDelayInput");
 const teilenummerGoBtn = document.getElementById("teilenummerGoBtn");
 
 const DEFAULT_PAGE_SIZE = 25;
@@ -238,6 +241,9 @@ const COLUMN_LABELS_BY_MODULE = {
     "A_STAT": "STAT",
     "A_ITNO": "ITNO",
     "A_SERN": "SERN",
+    "X_EINBAU": "EINBAU",
+    "X_AUSBAU_NEU": "AUSBAU NEU",
+    "X_EINBAU_NEU": "EINBAU NEU",
     "A_ALII": "ALII",
     "A_EQTP": "EQTP",
     "B_WHLO": "WHLO",
@@ -275,6 +281,9 @@ const COLUMN_ORDER_BY_MODULE = {
     "A_STAT",
     "A_ITNO",
     "A_SERN",
+    "X_EINBAU",
+    "X_AUSBAU_NEU",
+    "X_EINBAU_NEU",
     "A_ALII",
     "A_EQTP",
     "B_WHLO",
@@ -347,9 +356,19 @@ const FILTER_FIELDS_BY_MODULE = {
   ],
 };
 
-const resolveEnvValue = (value) => (value && value.toUpperCase() === "TEST" ? "TEST" : "LIVE");
+const resolveEnvValue = (value) => {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (normalized === "TEST" || normalized === "TST") return "TEST";
+  if (normalized === "LIVE" || normalized === "PRD" || normalized === "PROD") return "LIVE";
+  return "LIVE";
+};
 let currentEnv = resolveEnvValue(window.localStorage.getItem("sparepart.env") || "LIVE");
 let currentRsrdEnv = resolveEnvValue(window.localStorage.getItem("sparepart.rsrd_env") || currentEnv);
+const persistEnvPreferences = () => {
+  window.localStorage.setItem("sparepart.env", currentEnv);
+  window.localStorage.setItem("sparepart.rsrd_env", currentRsrdEnv);
+};
+persistEnvPreferences();
 
 const getErpEnvParam = () => currentEnv.toLowerCase();
 const getRsrdEnvParam = () => currentRsrdEnv.toLowerCase();
@@ -445,6 +464,59 @@ const escapeHtml = (value) =>
     }[ch] || ch),
   );
 
+const toTeilenummerKey = (itno, sern) =>
+  `${String(itno || "").trim().toUpperCase()}||${String(sern || "").trim().toUpperCase()}`;
+
+const formatYyyyMmDd = (value) => {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.length < 8) return "";
+  return `${digits.slice(6, 8)}.${digits.slice(4, 6)}.${digits.slice(0, 4)}`;
+};
+
+const formatHhMmSs = (value) => {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (!digits) return "";
+  const padded = digits.padStart(6, "0").slice(0, 6);
+  return `${padded.slice(0, 2)}:${padded.slice(2, 4)}:${padded.slice(4, 6)}`;
+};
+
+const getTeilenummerDateTimeValue = (row, key) => {
+  if (!row || currentModule !== "teilenummer") return { date: "", time: "" };
+  if (key === "X_EINBAU") {
+    return { date: formatYyyyMmDd(row.RGDT), time: formatHhMmSs(row.RGTM) };
+  }
+  if (key === "X_AUSBAU_NEU") {
+    return { date: formatYyyyMmDd(row.PLAN_OUT_DATE), time: formatHhMmSs(row.PLAN_OUT_TIME) };
+  }
+  if (key === "X_EINBAU_NEU") {
+    return { date: formatYyyyMmDd(row.PLAN_IN_DATE), time: formatHhMmSs(row.PLAN_IN_TIME) };
+  }
+  return { date: "", time: "" };
+};
+
+const updateExcelUploadInfo = () => {
+  if (!excelUploadInfo) return;
+  const selectedFile = excelUploadInput?.files?.[0]?.name || "";
+  const label = String(selectedFile || teilenummerExcelFilename || "-").trim() || "-";
+  excelUploadInfo.textContent = label;
+  excelUploadInfo.title = selectedFile || teilenummerExcelFilename || "-";
+};
+
+const parseDelayMinutes = (rawValue) => {
+  const text = String(rawValue ?? "").trim();
+  if (!text) return null;
+  const num = Number.parseInt(text, 10);
+  if (!Number.isFinite(num) || num < 0) {
+    throw new Error("Verzögerung muss eine nicht-negative ganze Zahl sein.");
+  }
+  return num;
+};
+
+const currentDelayPayload = () => ({
+  out_delay_min: parseDelayMinutes(ausbauDelayInput?.value),
+  in_delay_min: parseDelayMinutes(einbauDelayInput?.value),
+});
+
 let envMeta = null;
 let envMetaPromise = null;
 const expectedMetaEnv = () => (getErpEnvParam() === "live" ? "prd" : "tst");
@@ -459,7 +531,8 @@ const updateCountInfo = () => {
       `Keine Datenvorhanden (Quelle: ${sourceLabel}). Bitte drücken Sie "Daten aus PRD / TST aktualisieren".`;
     return;
   }
-  countInfo.textContent = `${wagons.length} von ${allWagons.length} Datensätzen (Quelle: ${sourceLabel})`;
+  const suffix = teilenummerExcelMappings.size ? " · Excel-Filter aktiv" : "";
+  countInfo.textContent = `${wagons.length} von ${allWagons.length} Datensätzen (Quelle: ${sourceLabel})${suffix}`;
 };
 
 const formatCacheStatusTime = (value) => {
@@ -664,6 +737,8 @@ let currentOriginalItno = "";
 let currentOriginalSern = "";
 let sparePartUser = window.localStorage.getItem("sparepart.user") || "";
 let teilenummerLogCount = 0;
+let teilenummerExcelMappings = new Map();
+let teilenummerExcelFilename = "";
 const rsrd2JobOffsets = {};
 const rsrd2JobStartTimes = {};
 
@@ -1116,7 +1191,7 @@ const setEnvironment = (envValue) => {
   const normalized = resolveEnvValue(envValue);
   if (normalized === currentEnv) return;
   currentEnv = normalized;
-  window.localStorage.setItem("sparepart.env", currentEnv);
+  persistEnvPreferences();
   envMeta = null;
   rsrd2Meta = { erp: null, rsrd: null, erpEnv: null, rsrdEnv: null, promise: null };
   swapSelected.clear();
@@ -1131,7 +1206,7 @@ const setRsrdEnvironment = (envValue) => {
   const normalized = resolveEnvValue(envValue);
   if (normalized === currentRsrdEnv) return;
   currentRsrdEnv = normalized;
-  window.localStorage.setItem("sparepart.rsrd_env", currentRsrdEnv);
+  persistEnvPreferences();
   rsrd2Meta = { erp: null, rsrd: null, erpEnv: null, rsrdEnv: null, promise: null };
   updateEnvSwitch();
   rsrd2Loaded = false;
@@ -1669,6 +1744,10 @@ const applyFilters = () => {
     return filterMatch && fulltextMatch;
   });
 
+  if (currentModule === "teilenummer" && teilenummerExcelMappings.size) {
+    wagons = wagons.filter((row) => teilenummerExcelMappings.has(toTeilenummerKey(row.A_ITNO, row.A_SERN)));
+  }
+
   currentPage = 1;
   updateCountInfo();
   renderPage();
@@ -1705,6 +1784,7 @@ const runCheckToggle = async (checked) => {
   setStatus(checked ? "Markiere Datensätze ..." : "Entferne Markierungen ...");
   showOverlayWithImage("bilder/animierte_sanduhr.gif", "Bitte warten");
   try {
+    const delayPayload = currentDelayPayload();
     for (const row of wagons) {
       await fetchJSON(withEnv("/api/teilenummer/check"), {
         method: "POST",
@@ -1714,6 +1794,7 @@ const runCheckToggle = async (checked) => {
           A_ITNO: row.A_ITNO ?? "",
           A_SERN: row.A_SERN ?? "",
           checked,
+          ...delayPayload,
         }),
       });
       row.CHECKED = checked ? "1" : "";
@@ -1726,11 +1807,86 @@ const runCheckToggle = async (checked) => {
   }
 };
 
+const loadTeilenummerExcelMappings = async () => {
+  if (!excelUploadInput || !excelUploadInput.files || !excelUploadInput.files[0]) {
+    teilenummerExcelMappings = new Map();
+    teilenummerExcelFilename = "";
+    updateExcelUploadInfo();
+    applyFilters();
+    return;
+  }
+  const file = excelUploadInput.files[0];
+  setStatus("Prüfe Excel-Mapping ...");
+  showOverlayWithImage("bilder/6-Bild.png", "Bitte warten");
+  try {
+    const toBase64 = (arrayBuffer) => {
+      let binary = "";
+      const bytes = new Uint8Array(arrayBuffer);
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, i + chunkSize);
+        binary += String.fromCharCode(...chunk);
+      }
+      return btoa(binary);
+    };
+    const contentBuffer = await file.arrayBuffer();
+    const response = await fetch(withEnv("/api/teilenummer/excel/validate"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: file.name || "",
+        content_b64: toBase64(contentBuffer),
+        ...currentDelayPayload(),
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || "Excel-Validierung fehlgeschlagen.");
+    }
+    const payload = await response.json();
+    const mappings = Array.isArray(payload.mappings) ? payload.mappings : [];
+    const mappingMap = new Map();
+    mappings.forEach((entry) => {
+      const key = toTeilenummerKey(entry.old_itno, entry.old_sern);
+      mappingMap.set(
+        key,
+        {
+          old_itno: String(entry.old_itno || "").trim(),
+          old_sern: String(entry.old_sern || "").trim(),
+          new_itno: String(entry.new_itno || "").trim(),
+          new_sern: String(entry.new_sern || "").trim(),
+        },
+      );
+      const row = allWagons.find((item) => toTeilenummerKey(item.A_ITNO, item.A_SERN) === key);
+      if (row) {
+        row.PLAN_OUT_DATE = String(entry.PLAN_OUT_DATE || "");
+        row.PLAN_OUT_TIME = String(entry.PLAN_OUT_TIME || "");
+        row.PLAN_IN_DATE = String(entry.PLAN_IN_DATE || "");
+        row.PLAN_IN_TIME = String(entry.PLAN_IN_TIME || "");
+        row.OUT_DELAY_MIN = String(entry.out_delay_min || "");
+        row.IN_DELAY_MIN = String(entry.in_delay_min || "");
+      }
+    });
+    teilenummerExcelMappings = mappingMap;
+    teilenummerExcelFilename = payload.filename || file.name || "";
+    updateExcelUploadInfo();
+    applyFilters();
+  } catch (error) {
+    teilenummerExcelMappings = new Map();
+    teilenummerExcelFilename = "";
+    updateExcelUploadInfo();
+    applyFilters();
+    showError(error.message || "Excel-Validierung fehlgeschlagen.");
+  } finally {
+    hideOverlay();
+  }
+};
+
 const prepareTeilenummerTausch = async () => {
   if (currentModule !== "teilenummer") return;
   const newItno = newItnoInput?.value.trim() || "";
-  const newSern = newSernInput?.value.trim() || "";
-  if (!newItno) {
+  const mappings = Array.from(teilenummerExcelMappings.values());
+  if (!newItno && !mappings.length) {
     window.alert("Bitte eine neue ITNO eingeben.");
     return;
   }
@@ -1741,7 +1897,12 @@ const prepareTeilenummerTausch = async () => {
     const data = await fetchJSON(withEnv("/api/teilenummer/prepare"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ new_itno: newItno, new_sern: newSern }),
+      body: JSON.stringify({
+        new_itno: newItno,
+        new_sern: "",
+        mappings,
+        ...currentDelayPayload(),
+      }),
     });
     showTeilenummerGo(Number(data.count || 0));
   } catch (error) {
@@ -1757,8 +1918,22 @@ const runTeilenummerGo = async () => {
     window.alert("Bitte zuerst 'Jetzt tauschen' ausführen.");
     return;
   }
+  let modeInfo = { env: getErpEnvParam(), dry_run: false, mode: "LIVE" };
+  try {
+    modeInfo = await fetchJSON(withEnv("/api/teilenummer/mode"));
+  } catch (error) {
+    console.warn("Konnte Betriebsmodus nicht vorab laden", error);
+  }
+  const modeEnv = String(modeInfo?.env || getErpEnvParam()).toUpperCase();
+  const modeLabel = modeInfo?.dry_run ? "DRYRUN" : "LIVE";
+  if (modeInfo?.dry_run) {
+    const proceed = window.confirm(
+      `Achtung: ${modeEnv} läuft aktuell im DRYRUN.\n\nTausch trotzdem starten?`,
+    );
+    if (!proceed) return;
+  }
   setTeilenummerControlsDisabled(true);
-  setStatus("Teilenummer-Ablauf startet ...");
+  setStatus(`Teilenummer-Ablauf startet (${modeEnv} · ${modeLabel}) ...`);
   showOverlay({ showRandomImage: false });
   setIndeterminate(true);
   teilenummerLogCount = 0;
@@ -1770,6 +1945,9 @@ const runTeilenummerGo = async () => {
       throw new Error(text || "Teilenummer-Ablauf fehlgeschlagen");
     }
     const runData = await runResp.json();
+    const runEnv = String(runData?.env || modeEnv).toUpperCase();
+    const runModeLabel = runData?.dry_run ? "DRYRUN" : "LIVE";
+    setStatus(`Teilenummer-Ablauf läuft (${runEnv} · ${runModeLabel}) ...`);
     renumberJobId = runData.job_id || null;
     renumberJobMode = "teilenummer";
     renumberResultCount = 0;
@@ -1829,6 +2007,23 @@ const renderPage = () => {
         td.appendChild(button);
       } else {
         let cellValue = wagon[key] ?? "";
+        const isTeilenummerDateColumn =
+          currentModule === "teilenummer" &&
+          (key === "X_EINBAU" || key === "X_AUSBAU_NEU" || key === "X_EINBAU_NEU");
+        if (isTeilenummerDateColumn) {
+          const dt = getTeilenummerDateTimeValue(wagon, key);
+          cellValue = dt.date || "-";
+          td.textContent = cellValue;
+          if (dt.time) {
+            const timeLine = document.createElement("small");
+            timeLine.className = "datetime-subline";
+            timeLine.textContent = dt.time;
+            td.appendChild(document.createElement("br"));
+            td.appendChild(timeLine);
+          }
+          tr.appendChild(td);
+          return;
+        }
         if (currentModule === "teilenummer") {
           if (key === "A_ALII" && cellValue) {
             cellValue = String(cellValue).slice(0, 15);
@@ -1838,6 +2033,19 @@ const renderPage = () => {
           }
         }
         td.textContent = cellValue;
+        if (currentModule === "teilenummer" && (key === "A_ITNO" || key === "A_SERN")) {
+          const mapping = teilenummerExcelMappings.get(toTeilenummerKey(wagon.A_ITNO, wagon.A_SERN));
+          if (mapping) {
+            const mappedValue = key === "A_ITNO" ? mapping.new_itno : mapping.new_sern;
+            if (mappedValue && String(mappedValue) !== String(cellValue || "")) {
+              const mappedLine = document.createElement("small");
+              mappedLine.className = "mapping-line";
+              mappedLine.textContent = mappedValue;
+              td.appendChild(document.createElement("br"));
+              td.appendChild(mappedLine);
+            }
+          }
+        }
       }
       tr.appendChild(td);
     });
@@ -1850,6 +2058,7 @@ const renderPage = () => {
       checkbox.checked = String(wagon.CHECKED || "").trim() === "1";
       checkbox.addEventListener("change", async () => {
         try {
+          const delayPayload = currentDelayPayload();
           await fetchJSON(withEnv("/api/teilenummer/check"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1858,6 +2067,7 @@ const renderPage = () => {
               A_ITNO: wagon.A_ITNO ?? "",
               A_SERN: wagon.A_SERN ?? "",
               checked: checkbox.checked,
+              ...delayPayload,
             }),
           });
           wagon.CHECKED = checkbox.checked ? "1" : "";
@@ -4494,6 +4704,12 @@ if (clearFiltersBtn) {
     updateObjStrkSearch();
   });
 }
+if (excelUploadInput) {
+  excelUploadInput.addEventListener("change", () => {
+    updateExcelUploadInfo();
+    loadTeilenummerExcelMappings();
+  });
+}
 if (backToWagonsBtn) {
   backToWagonsBtn.addEventListener("click", () => {
     showWagonsView();
@@ -4858,5 +5074,6 @@ if (partsResultsBody) {
     }
   });
 }
+updateExcelUploadInfo();
 setModule(currentModule, true);
 updateEnvSwitch();

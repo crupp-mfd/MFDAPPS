@@ -1,0 +1,42 @@
+.rsrd2-documents-page {
+  background: #f4f6fa;
+}
+
+.rsrd2-documents-page .m3-header {
+  max-width: 1300px;
+  margin: 0 auto;
+  position: relative;
+  background: #f7f9fd !important;
+  color: #1f3554 !important;
+  border: 1px solid #d5dfeb;
+  box-shadow: 0 8px 20px rgba(17, 35, 64, 0.08);
+}
+
+.rsrd2-documents-page .m3-header .app-title {
+  color: #1f3554 !important;
+}
+
+.rsrd2-documents-page .m3-header .app-subtitle {
+  color: #4d6384 !important;
+  opacity: 1;
+}
+
+.rsrd2-documents-page main.container-xxl {
+  max-width: 1300px;
+}
+
+.rsrd2-documents-page .card {
+  border: 1px solid #d5dfeb;
+  border-radius: 12px;
+  box-shadow: 0 8px 20px rgba(17, 35, 64, 0.06);
+}
+
+.rsrd2-documents-page .table {
+  margin-bottom: 0;
+}
+
+.rsrd2-documents-page .table thead th {
+  background: #eef3fa;
+  color: #1f3554;
+  font-weight: 700;
+}

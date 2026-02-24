@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MFD Automation</title>
     <link rel="stylesheet" href="ids-enterprise.css?v=1" />
-    <link rel="stylesheet" href="styles.css?v=44" />
+    <link rel="stylesheet" href="styles.css?v=59" />
   </head>
   <body data-default-module="teilenummer">
     <div id="loaderOverlay" class="loader-overlay hidden">
@@ -43,23 +43,7 @@
     </div>
     <header class="m3-header">
       <div class="header-left">
-        <div class="menu-wrapper">
-          <button class="menu-btn" id="mainMenuBtn" aria-label="Menü">
-            <span></span><span></span><span></span>
-          </button>
-          <div class="menu-dropdown hidden" id="mainMenu">
-            <button type="button" class="menu-item" data-page="/objektstrukturtausch.html?module=sparepart">
-              1. Objektstrukturtausch
-            </button>
-            <button type="button" class="menu-item" data-page="/objektstrukturtausch.html?module=rsrd2">
-              2. RSRD2 Sync
-            </button>
-            <button type="button" class="menu-item" data-page="/wagenumbau.html">3. Bremsenumbau</button>
-            <button type="button" class="menu-item menu-item--active" data-module="teilenummer">
-              4. Teilenummer ändern
-            </button>
-          </div>
-        </div>
+        <a class="home-link" href="/apps/christian/">HOME</a>
         <div>
           <div class="app-title" id="moduleTitle">MFD Automation</div>
           <div class="app-subtitle" id="moduleSubtitle">MFDApps &middot; Teilenummer ändern</div>
@@ -79,7 +63,7 @@
     <main>
       <div id="sparepartModule">
         <div class="layout" id="wagonsView">
-          <section class="card filter-card" id="filterPanel">
+          <section class="card filter-card teilenummer-filter-shell" id="filterPanel">
             <div class="filter-grid">
               <div class="filter-field filter-field--stat">
                 <label class="filter-label" for="aStatFilter">STAT</label>
@@ -162,24 +146,6 @@
                 <label class="filter-label" for="wSernFilter">W_SERN</label>
                 <div class="combo">
                   <input id="wSernFilter" list="wSernOptions" type="text" placeholder="W_SERN" autocomplete="off" />
-                </div>
-                <datalist id="wSernOptions"></datalist>
-              </div>
-              <div class="filter-field filter-field--newitno filter-inline">
-                <label class="filter-label" for="newItnoInput">Neue ITNO</label>
-                <div class="combo">
-                  <input id="newItnoInput" type="text" placeholder="Neue ITNO" autocomplete="off" />
-                </div>
-              </div>
-              <div class="filter-field filter-field--newsern filter-inline">
-                <label class="filter-label" for="newSernInput">Neue SERN</label>
-                <div class="combo">
-                  <input id="newSernInput" type="text" placeholder="Neue SERN" autocomplete="off" />
-                </div>
-              </div>
-              <div class="filter-field filter-field--clear">
-                <label class="filter-label">&nbsp;</label>
-                <div class="combo">
                   <button
                     id="clearFiltersBtn"
                     class="filter-clear-btn"
@@ -190,7 +156,33 @@
                     X
                   </button>
                 </div>
+                <datalist id="wSernOptions"></datalist>
               </div>
+            </div>
+            <div class="teilenummer-action-row">
+              <label class="action-input-wrap" for="newItnoInput">
+                <span class="action-title">Neue ITNO</span>
+                <input id="newItnoInput" type="text" placeholder="Neue ITNO" autocomplete="off" />
+              </label>
+              <div class="action-input-wrap action-input-wrap--file">
+                <span class="action-title">Excel Mapping</span>
+                <div class="excel-upload-control">
+                  <input id="excelUploadInput" class="excel-upload-native" type="file" accept=".xlsx,.xlsm,.xls" />
+                  <label for="excelUploadInput" class="excel-upload-btn" title="Datei auswählen">Datei auswählen</label>
+                  <span id="excelUploadInfo" class="excel-upload-name" title="-">-</span>
+                </div>
+              </div>
+              <label class="delay-input-wrap" for="ausbauDelayInput">
+                <span class="action-title">Ausbau Verzögerung (min.)</span>
+                <input id="ausbauDelayInput" type="number" min="0" step="1" placeholder="0" />
+              </label>
+              <label class="delay-input-wrap" for="einbauDelayInput">
+                <span class="action-title">Einbau Verzögerung (min.)</span>
+                <input id="einbauDelayInput" type="number" min="0" step="1" placeholder="0" />
+              </label>
+              <button id="openSwapDbFromWagons" class="ids-button swap-cta" type="button">Jetzt tauschen</button>
+              <button id="reloadBtn" class="ids-button reload-primary">Daten aktualisieren</button>
+              <button id="teilenummerGoBtn" class="ids-button go-cta hidden" type="button">GO (0)</button>
             </div>
           </section>
           <section class="card table-card hidden" id="tablePanel">
@@ -201,9 +193,6 @@
                 <p id="cacheStatusInfo" class="cache-status-info"></p>
               </div>
               <div class="table-actions">
-                <button id="teilenummerGoBtn" class="ids-button go-cta hidden" type="button">GO (0)</button>
-                <button id="openSwapDbFromWagons" class="ids-button swap-cta" type="button">Jetzt tauschen</button>
-                <button id="reloadBtn" class="ids-button reload-primary">Daten aus PRD / TST aktualisieren</button>
                 <div class="page-size-control">
                   <label class="page-size-label" for="pageSizeSelect">Zeilen</label>
                   <select id="pageSizeSelect" class="page-size-select" aria-label="Zeilen pro Seite">
@@ -381,6 +370,6 @@
       </div>
     </div>
     <script src="api-config.js?v=1"></script>
-    <script src="app.js?v=46" type="module"></script>
+    <script src="app.js?v=48" type="module"></script>
   </body>
 </html>

@@ -12,7 +12,9 @@ select
   c.MTRL as "C_MTRL",
   c.SERN as "C_SERN",
   d.HISN as "W_SERN",
-  d.HIIT as "W_ITNO"
+  d.HIIT as "W_ITNO",
+  d.RGDT as "RGDT",
+  d.RGTM as "RGTM"
 from MILOIN a
 left outer join MITLOC b
   on a.CONO = b.CONO

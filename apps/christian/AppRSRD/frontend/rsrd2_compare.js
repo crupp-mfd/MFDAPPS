@@ -15,6 +15,26 @@ const documentsBody = document.getElementById("rsrd2DocumentsBody");
 const resolveEnvValue = (value) => (value && value.toUpperCase() === "TEST" ? "TEST" : "LIVE");
 let currentEnv = resolveEnvValue(window.localStorage.getItem("sparepart.env") || "LIVE");
 let currentRsrdEnv = resolveEnvValue(window.localStorage.getItem("sparepart.rsrd_env") || currentEnv);
+const resolveEnvParam = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (["test", "tst", "t"].includes(normalized)) return "TEST";
+  if (["live", "prd", "p", "l"].includes(normalized)) return "LIVE";
+  return null;
+};
+{
+  const params = new URLSearchParams(window.location.search);
+  const erpFromUrl = resolveEnvParam(params.get("env"));
+  const rsrdFromUrl = resolveEnvParam(params.get("rsrd_env"));
+  if (erpFromUrl) {
+    currentEnv = erpFromUrl;
+    window.localStorage.setItem("sparepart.env", currentEnv);
+  }
+  if (rsrdFromUrl) {
+    currentRsrdEnv = rsrdFromUrl;
+    window.localStorage.setItem("sparepart.rsrd_env", currentRsrdEnv);
+  }
+}
 const getErpEnvParam = () => currentEnv.toLowerCase();
 const getRsrdEnvParam = () => currentRsrdEnv.toLowerCase();
 const stripTrailingSlash = (value) => String(value || "").replace(/\/+$/, "");

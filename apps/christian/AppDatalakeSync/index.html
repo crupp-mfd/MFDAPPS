@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AppDatalakeSync</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/apps/christian/AppRSRD/frontend/ids-enterprise.css?v=2" />
+    <link rel="stylesheet" href="./styles.css?v=21" />
+  </head>
+  <body data-default-module="rsrd2">
+    <header class="m3-header">
+      <div class="header-left">
+        <div class="menu-wrapper">
+          <a class="ids-button tertiary home-link-btn" href="/apps/christian/" aria-label="Zurück zum Portal">
+            &lsaquo; Home
+          </a>
+        </div>
+        <div>
+          <div class="app-title">MFD Automation</div>
+          <div class="app-subtitle">MFDApps · DataLake/Fabric Tabellenabgleich</div>
+        </div>
+      </div>
+      <div class="env-switch-group">
+        <div class="env-switch-block">
+          <span class="env-switch-title">ERP</span>
+          <div class="env-switch" id="envSwitch" data-env="live">
+            <span class="env-label env-label--test">TEST</span>
+            <button id="envToggle" class="env-toggle" type="button" aria-label="ERP Umgebung wechseln">
+              <span class="env-toggle-handle"></span>
+            </button>
+            <span class="env-label env-label--live">LIVE</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-right">
+        <button id="openStatusBtn" class="action-btn" type="button">Status</button>
+        <button id="refreshBtn" class="action-btn" type="button">Neu laden</button>
+      </div>
+    </header>
+
+    <main class="app-main-shell">
+      <section class="card status-strip" aria-live="polite">
+        <span id="statusText">Initialisiere ...</span>
+        <span id="progressText"></span>
+      </section>
+
+      <section class="card table-card">
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Tabelle</th>
+                <th>DL Datensätze</th>
+                <th>DL Felder</th>
+                <th>DL Update</th>
+                <th>FB Datensätze</th>
+                <th>FB Felder</th>
+                <th>FB Update</th>
+                <th>Abgleich</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody">
+              <tr>
+                <td colspan="9">Lade Tabellen ...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <div id="progressOverlay" class="progress-overlay" aria-live="polite" aria-modal="true" role="dialog" hidden>
+      <div class="progress-modal">
+        <div class="progress-header">
+          <div class="progress-spinner" aria-hidden="true"></div>
+          <div class="progress-title">Aktualisierung läuft</div>
+          <button id="closeStatusBtn" class="progress-close-btn" type="button" aria-label="Status schließen">Schließen</button>
+        </div>
+        <div id="modalPhaseText" class="progress-phase">Initialisiere ...</div>
+        <div id="modalCurrentTable" class="progress-current"></div>
+        <ul id="modalLog" class="status-log-list">
+          <li>Warte auf Start ...</li>
+        </ul>
+      </div>
+    </div>
+
+    <div
+      id="tableDetailModal"
+      class="datalake-detail-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-hidden="true"
+      aria-labelledby="tableDetailTitle"
+      style="display: none;"
+    >
+      <div id="tableDetailWindow" class="modal-inner datalake-detail-modal">
+        <header id="tableDetailDragHandle" class="modal-header datalake-detail-drag-handle">
+          <h2 id="tableDetailTitle">Tabellendetail</h2>
+          <button id="tableDetailCloseBtn" class="ids-button tertiary" type="button">Schließen</button>
+        </header>
+        <section class="modal-body datalake-detail-body">
+          <div id="tableDetailLoadState" class="datalake-detail-load">Bereit.</div>
+          <div id="tableDetailMeta" class="datalake-detail-meta">Lade Details ...</div>
+          <div class="datalake-detail-actions">
+            <div class="datalake-sync-actions">
+              <button id="tableSyncAddBtn" class="sync-action-btn sync-add-btn" type="button">In Sync übernehmen</button>
+              <button id="tableSyncRemoveBtn" class="sync-action-btn sync-remove-btn" type="button">Aus Sync entfernen</button>
+            </div>
+            <a
+              id="tableProtocolLink"
+              class="sync-action-btn datalake-protocol-link"
+              href="./protokoll.html"
+              target="_blank"
+              rel="noopener"
+            >
+              Protokoll
+            </a>
+          </div>
+          <div class="datalake-diff-head">
+            <h3>Feldvergleich</h3>
+            <div id="tableDiffSummary" class="datalake-diff-summary">-</div>
+          </div>
+          <div class="table-wrapper datalake-diff-table-wrap">
+            <table class="ids-data-table">
+              <thead>
+                <tr>
+                  <th>Feld</th>
+                  <th>DataLake Typ</th>
+                  <th>Fabric Typ</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="tableDetailDiffBody">
+                <tr>
+                  <td colspan="4">Noch keine Daten geladen.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <script src="./app.js?v=27"></script>
+  </body>
+</html>
