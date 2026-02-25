@@ -1191,9 +1191,9 @@ def _cache_status_for(base_table: str, env: str) -> dict:
     normalized = _normalize_env(env)
     env_table = _table_for(base_table, normalized)
 
-    for attempt in range(6):
+    for attempt in range(2):
         try:
-            with _connect(timeout=2.0, busy_timeout_ms=2000) as conn:
+            with _connect(timeout=0.5, busy_timeout_ms=500) as conn:
                 _ensure_cache_status_table(conn)
                 row = conn.execute(
                     f"SELECT base_table, env, env_table, row_count, loaded_at, source FROM {CACHE_STATUS_TABLE} WHERE base_table = ? AND env = ?",
@@ -1227,7 +1227,7 @@ def _cache_status_for(base_table: str, env: str) -> dict:
         except sqlite3.OperationalError as exc:
             if not _is_sqlite_locked_error(exc):
                 raise
-            if attempt >= 5:
+            if attempt >= 1:
                 return {
                     "table": base_table,
                     "env": normalized,
@@ -1236,7 +1236,7 @@ def _cache_status_for(base_table: str, env: str) -> dict:
                     "loaded_at": None,
                     "source": "locked",
                 }
-            time.sleep(0.25 * (attempt + 1))
+            time.sleep(0.1 * (attempt + 1))
 
     return {
         "table": base_table,
