@@ -5,14 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MFD Automation</title>
     <link rel="stylesheet" href="ids-enterprise.css?v=1" />
-    <link rel="stylesheet" href="styles.css?v=59" />
+    <link rel="stylesheet" href="styles.css?v=79" />
   </head>
   <body data-default-module="teilenummer">
     <div id="loaderOverlay" class="loader-overlay hidden">
       <section class="card loader-card" id="loaderPanel">
+        <button id="loaderCloseBtn" class="loader-close-btn hidden" type="button" aria-label="Statusfenster schließen">
+          X
+        </button>
         <h1>MFD Rail</h1>
         <p class="subtitle" id="loaderSubtitle">Teilenummer ändern</p>
         <div class="status-line" id="statusText">VERBINDE ...</div>
+        <div class="loader-spinner hidden" id="loaderSpinner" aria-hidden="true"></div>
+        <pre id="loaderMessageBox" class="loader-message-box hidden"></pre>
+        <a id="loaderDownloadLink" class="loader-download-link hidden" href="#" download>Download Excel</a>
+        <button id="loaderActionBtn" class="ids-button tertiary hidden" type="button">Fenster schließen</button>
         <div class="loader-random-image hidden" id="loaderRandomImageWrap">
           <img id="loaderRandomImage" alt="Statusbild" />
         </div>
@@ -35,7 +42,7 @@
             <span class="loader-io-value" id="loaderTarget">-</span>
           </div>
         </div>
-        <div class="progress-wrapper">
+        <div class="progress-wrapper" id="progressWrapper">
           <div class="progress-bar" id="progressBar"></div>
         </div>
         <div class="progress-detail" id="progressDetail">0&nbsp;/&nbsp;0</div>
@@ -146,49 +153,89 @@
                 <label class="filter-label" for="wSernFilter">W_SERN</label>
                 <div class="combo">
                   <input id="wSernFilter" list="wSernOptions" type="text" placeholder="W_SERN" autocomplete="off" />
-                  <button
-                    id="clearFiltersBtn"
-                    class="filter-clear-btn"
-                    type="button"
-                    title="Alle Filter löschen"
-                    aria-label="Alle Filter löschen"
-                  >
-                    X
-                  </button>
                 </div>
                 <datalist id="wSernOptions"></datalist>
               </div>
+              <div class="filter-field filter-field--clear">
+                <label class="filter-label" for="clearFiltersBtn">&nbsp;</label>
+                <button
+                  id="clearFiltersBtn"
+                  class="filter-clear-btn"
+                  type="button"
+                  title="Alle Filter löschen"
+                  aria-label="Alle Filter löschen"
+                >
+                  X
+                </button>
+              </div>
             </div>
             <div class="teilenummer-action-row">
-              <label class="action-input-wrap" for="newItnoInput">
-                <span class="action-title">Neue ITNO</span>
-                <input id="newItnoInput" type="text" placeholder="Neue ITNO" autocomplete="off" />
-              </label>
-              <div class="action-input-wrap action-input-wrap--file">
-                <span class="action-title">Excel Mapping</span>
-                <div class="excel-upload-control">
-                  <input id="excelUploadInput" class="excel-upload-native" type="file" accept=".xlsx,.xlsm,.xls" />
-                  <label for="excelUploadInput" class="excel-upload-btn" title="Datei auswählen">Datei auswählen</label>
-                  <span id="excelUploadInfo" class="excel-upload-name" title="-">-</span>
-                </div>
+              <div class="action-group action-group--identity">
+                <label class="action-input-wrap" for="newItnoInput">
+                  <span class="action-title">Neue ITNO</span>
+                  <input id="newItnoInput" type="text" placeholder="Neue ITNO" autocomplete="off" />
+                </label>
+                <label class="action-input-wrap action-input-wrap--sern" for="newSernInput">
+                  <span class="action-title">Neue SERN</span>
+                  <input id="newSernInput" type="text" placeholder="Neue SERN" autocomplete="off" />
+                </label>
               </div>
-              <label class="delay-input-wrap" for="ausbauDelayInput">
-                <span class="action-title">Ausbau Verzögerung (min.)</span>
-                <input id="ausbauDelayInput" type="number" min="0" step="1" placeholder="0" />
-              </label>
-              <label class="delay-input-wrap" for="einbauDelayInput">
-                <span class="action-title">Einbau Verzögerung (min.)</span>
-                <input id="einbauDelayInput" type="number" min="0" step="1" placeholder="0" />
-              </label>
-              <button id="openSwapDbFromWagons" class="ids-button swap-cta" type="button">Jetzt tauschen</button>
-              <button id="reloadBtn" class="ids-button reload-primary">Daten aktualisieren</button>
-              <button id="teilenummerGoBtn" class="ids-button go-cta hidden" type="button">GO (0)</button>
+              <div class="action-group action-group--mapping">
+                <div class="action-input-wrap action-input-wrap--file">
+                  <span class="action-title">Excel Mapping</span>
+                  <div class="excel-upload-control">
+                    <input id="excelUploadInput" class="excel-upload-native" type="file" accept=".xlsx,.xlsm,.xls" />
+                    <label for="excelUploadInput" class="excel-upload-btn" title="Datei auswählen">Datei auswählen</label>
+                    <span id="excelUploadInfo" class="excel-upload-name" title="-">-</span>
+                  </div>
+                </div>
+                <label class="delay-input-wrap" for="ausbauDelayInput">
+                  <span class="action-title">Ausbau Verzögerung</span>
+                  <span class="delay-input-inline">
+                    <input id="ausbauDelayInput" type="number" min="0" step="1" placeholder="0" />
+                    <span class="delay-min">Min.</span>
+                  </span>
+                </label>
+                <label class="delay-input-wrap" for="einbauDelayInput">
+                  <span class="action-title">Einbau Verzögerung</span>
+                  <span class="delay-input-inline">
+                    <input id="einbauDelayInput" type="number" min="0" step="1" placeholder="0" />
+                    <span class="delay-min">Min.</span>
+                  </span>
+                </label>
+              </div>
+              <div class="action-group action-group--actions">
+                <button id="openSwapDbFromWagons" class="ids-button swap-cta" type="button">In Tausch-DB eintragen</button>
+                <button id="reloadBtn" class="ids-button reload-primary">Daten aktualisieren</button>
+                <button id="teilenummerGoBtn" class="ids-button go-cta go-cta--idle" type="button">GO (0)</button>
+              </div>
+              <div class="action-group action-group--log">
+                <button
+                  id="apiLogBtn"
+                  class="ids-button api-log-btn"
+                  type="button"
+                  title="API-Log anzeigen"
+                  aria-label="API-Log anzeigen"
+                >
+                  <span>LOG</span>
+                  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
+                    <path d="M7 2h7l5 5v14a1 1 0 0 1-1 1H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V8h4.5zM8.5 11h7v1.5h-7zm0 3.5h7v1.5h-7zm0 3.5h5v1.5h-5z" fill="currentColor"/>
+                  </svg>
+                </button>
+              </div>
             </div>
           </section>
           <section class="card table-card hidden" id="tablePanel">
             <header class="table-header">
               <div class="table-header-summary">
-                <h2>Wagenübersicht</h2>
+                <h2>
+                  <button id="exportSelectionBtn" class="export-selection-btn" type="button" title="Selektion als Excel exportieren" aria-label="Selektion als Excel exportieren">
+                    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zm0 1.5L18.5 8H14zM8.8 10l1.8 3-1.9 3h1.8l1.1-1.9 1.1 1.9h1.8l-1.9-3 1.8-3h-1.7l-1 1.8-1-1.8z" fill="currentColor"/>
+                    </svg>
+                  </button>
+                  Wagenübersicht
+                </h2>
                 <p id="countInfo"></p>
                 <p id="cacheStatusInfo" class="cache-status-info"></p>
               </div>
@@ -369,7 +416,20 @@
         <div class="modal-resize-handle" id="partsResizeHandle"></div>
       </div>
     </div>
+    <div id="apiLogModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="apiLogModalTitle">
+      <div class="modal-inner api-log-modal-content">
+        <div class="modal-header">
+          <h3 id="apiLogModalTitle">API-Log</h3>
+          <button id="closeApiLogBtn" class="ids-button tertiary" type="button" aria-label="API-Log schließen">Schließen</button>
+        </div>
+        <div class="api-log-actions">
+          <button id="clearApiLogBtn" class="ids-button tertiary" type="button">Log löschen</button>
+          <button id="exportApiLogCsvBtn" class="ids-button tertiary" type="button">Als CSV exportieren</button>
+        </div>
+        <pre id="apiLogContent" class="api-log-content">Lade API-Log ...</pre>
+      </div>
+    </div>
     <script src="api-config.js?v=1"></script>
-    <script src="app.js?v=48" type="module"></script>
+    <script src="app.js?v=79" type="module"></script>
   </body>
 </html>

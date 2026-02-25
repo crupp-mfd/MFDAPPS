@@ -1,6 +1,7 @@
 const statusText = document.getElementById("statusText");
 const loaderSubtitle = document.getElementById("loaderSubtitle");
 const progressBar = document.getElementById("progressBar");
+const progressWrapper = document.getElementById("progressWrapper");
 const progressDetail = document.getElementById("progressDetail");
 const loaderPanel = document.getElementById("loaderPanel");
 const loaderOverlay = document.getElementById("loaderOverlay");
@@ -13,6 +14,11 @@ const loaderStepImageWrap = document.getElementById("loaderStepImageWrap");
 const loaderStepImage = document.getElementById("loaderStepImage");
 const loaderRandomImage = document.getElementById("loaderRandomImage");
 const loaderRandomImageWrap = document.getElementById("loaderRandomImageWrap");
+const loaderSpinner = document.getElementById("loaderSpinner");
+const loaderCloseBtn = document.getElementById("loaderCloseBtn");
+const loaderMessageBox = document.getElementById("loaderMessageBox");
+const loaderActionBtn = document.getElementById("loaderActionBtn");
+const loaderDownloadLink = document.getElementById("loaderDownloadLink");
 const mainMenuBtn = document.getElementById("mainMenuBtn");
 const mainMenu = document.getElementById("mainMenu");
 const envSwitch = document.getElementById("envSwitch");
@@ -63,6 +69,7 @@ const tableHead = document.getElementById("tableHead");
 const tableBody = document.getElementById("tableBody");
 const countInfo = document.getElementById("countInfo");
 const cacheStatusInfo = document.getElementById("cacheStatusInfo");
+const exportSelectionBtn = document.getElementById("exportSelectionBtn");
 const paginationInfo = document.getElementById("paginationInfo");
 const prevBtn = document.getElementById("prevPage");
 const nextBtn = document.getElementById("nextPage");
@@ -190,11 +197,18 @@ const wItnoOptionsList = document.getElementById("wItnoOptions");
 const wSernFilterInput = document.getElementById("wSernFilter");
 const wSernOptionsList = document.getElementById("wSernOptions");
 const newItnoInput = document.getElementById("newItnoInput");
+const newSernInput = document.getElementById("newSernInput");
 const excelUploadInput = document.getElementById("excelUploadInput");
 const excelUploadInfo = document.getElementById("excelUploadInfo");
 const ausbauDelayInput = document.getElementById("ausbauDelayInput");
 const einbauDelayInput = document.getElementById("einbauDelayInput");
 const teilenummerGoBtn = document.getElementById("teilenummerGoBtn");
+const apiLogBtn = document.getElementById("apiLogBtn");
+const apiLogModal = document.getElementById("apiLogModal");
+const apiLogContent = document.getElementById("apiLogContent");
+const closeApiLogBtn = document.getElementById("closeApiLogBtn");
+const clearApiLogBtn = document.getElementById("clearApiLogBtn");
+const exportApiLogCsvBtn = document.getElementById("exportApiLogCsvBtn");
 
 const DEFAULT_PAGE_SIZE = 25;
 const CHUNK_SIZE = 150;
@@ -207,11 +221,20 @@ const RSRD2_JOB_POLL_MS = 1500;
 // ... existing code ...
 
 const hideOverlay = (jobFinished = false) => {
+  if (overlayPinnedOpen) return;
   const elapsed = Date.now() - overlayShownAt;
   const minDuration = jobFinished ? MIN_JOB_OVERLAY_MS : MIN_OVERLAY_MS;
   const remaining = Math.max(0, minDuration - elapsed);
   window.setTimeout(() => {
+    if (overlayPinnedOpen) return;
     loaderOverlay.classList.add("hidden");
+    setOverlayPinned(false);
+    setOverlaySpinner(false);
+    setOverlayMessage("");
+    setOverlayActionVisible(false);
+    setOverlayDownloadLink("", "");
+    setOverlayProgressVisible(true);
+    setRandomOverlayImage(false);
     clearOverlayContext();
   }, remaining);
 };
@@ -278,7 +301,6 @@ const COLUMN_ORDER_BY_MODULE = {
     "OBJSTRK",
   ],
   teilenummer: [
-    "A_STAT",
     "A_ITNO",
     "A_SERN",
     "X_EINBAU",
@@ -482,13 +504,21 @@ const formatHhMmSs = (value) => {
 
 const getTeilenummerDateTimeValue = (row, key) => {
   if (!row || currentModule !== "teilenummer") return { date: "", time: "" };
+  const isRealtimeDelay = (value) => {
+    const text = String(value ?? "").trim();
+    if (!text) return true;
+    const num = Number.parseInt(text, 10);
+    return Number.isFinite(num) && num === 0;
+  };
   if (key === "X_EINBAU") {
     return { date: formatYyyyMmDd(row.RGDT), time: formatHhMmSs(row.RGTM) };
   }
   if (key === "X_AUSBAU_NEU") {
+    if (isRealtimeDelay(row.OUT_DELAY_MIN)) return { date: "Timestamp", time: "" };
     return { date: formatYyyyMmDd(row.PLAN_OUT_DATE), time: formatHhMmSs(row.PLAN_OUT_TIME) };
   }
   if (key === "X_EINBAU_NEU") {
+    if (isRealtimeDelay(row.IN_DELAY_MIN)) return { date: "Timestamp", time: "" };
     return { date: formatYyyyMmDd(row.PLAN_IN_DATE), time: formatHhMmSs(row.PLAN_IN_TIME) };
   }
   return { date: "", time: "" };
@@ -497,9 +527,65 @@ const getTeilenummerDateTimeValue = (row, key) => {
 const updateExcelUploadInfo = () => {
   if (!excelUploadInfo) return;
   const selectedFile = excelUploadInput?.files?.[0]?.name || "";
-  const label = String(selectedFile || teilenummerExcelFilename || "-").trim() || "-";
-  excelUploadInfo.textContent = label;
-  excelUploadInfo.title = selectedFile || teilenummerExcelFilename || "-";
+  const rawLabel = String(selectedFile || teilenummerExcelFilename || "-").trim() || "-";
+  let shortLabel = rawLabel;
+  if (rawLabel !== "-" && rawLabel.length > 25) {
+    shortLabel = `${rawLabel.slice(0, 25)}...`;
+  }
+  excelUploadInfo.textContent = shortLabel;
+  excelUploadInfo.title = rawLabel;
+};
+
+const showTeilenummerExcelValidationPopup = (payload, hasError = false) => {
+  const checks = Array.isArray(payload?.checks) ? payload.checks : [];
+  const validation = payload?.validation || {};
+  const checked = Number(validation.checked || checks.length || 0);
+  const ok = Number(validation.ok || checks.filter((entry) => entry?.allowed).length || 0);
+  const failed = Number(validation.failed || Math.max(0, checked - ok));
+  const isWarningCheck = (entry) => String(entry?.message || "").trim().toUpperCase().startsWith("WARN:");
+  const warningChecks = checks.filter((entry) => isWarningCheck(entry));
+  const warningCount = warningChecks.length;
+  const lines = [];
+  const formatCheckLine = (entry) => {
+    const row = entry?.row ?? "-";
+    const oldPair = `${entry?.old_itno || "-"} / ${entry?.old_sern || "-"}`;
+    const newPair = `${entry?.new_itno || "-"} / ${entry?.new_sern || "-"}`;
+    const hitn = entry?.hitn || "-";
+    const status = isWarningCheck(entry) ? "WARN" : (entry?.allowed ? "OK" : "NOK");
+    const message = entry?.message || "-";
+    return `Zeile ${row} | ALT ${oldPair} -> NEU ${newPair} | HITN ${hitn} | ${status} | ${message}`;
+  };
+  if (hasError) {
+    lines.push(`Excel-Validierung mit Fehlern: geprüft=${checked}, ok=${ok}, warnungen=${warningCount}, fehler=${failed}`);
+    const failedChecks = checks.filter((entry) => !entry?.allowed);
+    if (failedChecks.length) {
+      lines.push("");
+      lines.push("Prüflog:");
+      failedChecks.forEach((entry) => lines.push(formatCheckLine(entry)));
+    }
+    const errors = Array.isArray(payload?.errors) ? payload.errors : [];
+    if (errors.length) {
+      lines.push("");
+      lines.push("Fehler:");
+      errors.forEach((entry) => lines.push(String(entry || "")));
+    } else if (failedChecks.length) {
+      failedChecks
+        .filter((entry) => !entry?.allowed)
+        .forEach((entry) => lines.push(`Zeile ${entry?.row ?? "-"}: ${entry?.message || "Fehler"}`));
+    }
+  } else {
+    lines.push(`Excel wurde geprüft. geprüft=${checked}, warnungen=${warningCount}, fehler=${failed}`);
+    if (warningChecks.length) {
+      lines.push("");
+      lines.push("Warnungen (werden im Lauf per MOS450MI/AddComponent angelegt):");
+      warningChecks.forEach((entry) => lines.push(formatCheckLine(entry)));
+    }
+  }
+  setOverlayMessage(lines.join("\n"));
+  setOverlaySpinner(false);
+  setOverlayProgressVisible(false);
+  setOverlayPinned(true);
+  setOverlayActionVisible(false);
 };
 
 const parseDelayMinutes = (rawValue) => {
@@ -516,6 +602,86 @@ const currentDelayPayload = () => ({
   out_delay_min: parseDelayMinutes(ausbauDelayInput?.value),
   in_delay_min: parseDelayMinutes(einbauDelayInput?.value),
 });
+
+const buildExportTimestamp = () => {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+};
+
+const buildTeilenummerExportRows = () => {
+  const columnOrder = getColumnOrder();
+  const labels = getColumnLabels();
+  const columns = columnOrder.map((key) => labels[key] || key);
+  const rows = wagons.map((wagon) => {
+    const out = {};
+    out.__W_STAT = wagon.W_STAT ?? "";
+    out.__A_STAT = wagon.A_STAT ?? "";
+    columnOrder.forEach((key, index) => {
+      const label = columns[index];
+      if (key === "X_EINBAU" || key === "X_AUSBAU_NEU" || key === "X_EINBAU_NEU") {
+        const dt = getTeilenummerDateTimeValue(wagon, key);
+        out[label] = dt.time ? `${dt.date || "-"} ${dt.time}` : (dt.date || "-");
+      } else {
+        out[label] = wagon[key] ?? "";
+      }
+    });
+    return out;
+  });
+  return { columns, rows };
+};
+
+const exportTeilenummerSelection = async () => {
+  if (currentModule !== "teilenummer") return;
+  if (!wagons.length) {
+    showError("Keine Datensätze für Export vorhanden.");
+    return;
+  }
+  setStatus("Excel wird erstellt ...");
+  showOverlay({ showRandomImage: false, showProgress: false });
+  setOverlaySpinner(true);
+  setOverlayMessage("Excel wird erstellt ...");
+  setOverlayProgressVisible(false);
+  setOverlayActionVisible(false);
+  setOverlayDownloadLink("", "");
+  try {
+    const payload = buildTeilenummerExportRows();
+    const envLabel = currentDataEnvLabel();
+    const filename = `Wagenuebersicht_${envLabel}_${buildExportTimestamp()}.xlsx`;
+    const response = await fetch(withEnv("/api/teilenummer/export_xlsx"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename,
+        columns: payload.columns,
+        rows: payload.rows,
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || "Excel-Export fehlgeschlagen.");
+    }
+    const blob = await response.blob();
+    if (excelExportObjectUrl) {
+      URL.revokeObjectURL(excelExportObjectUrl);
+    }
+    excelExportObjectUrl = URL.createObjectURL(blob);
+    setStatus("Excel wurde erstellt.");
+    setOverlaySpinner(false);
+    setOverlayMessage("Excel wurde erstellt.");
+    setOverlayProgressVisible(false);
+    setOverlayDownloadLink(excelExportObjectUrl, "Download Excel", filename);
+    setOverlayPinned(true);
+    setOverlayActionVisible(false);
+  } catch (error) {
+    setOverlaySpinner(false);
+    setOverlayMessage(error.message || "Excel-Export fehlgeschlagen.");
+    setOverlayProgressVisible(false);
+    setOverlayPinned(true);
+    setOverlayActionVisible(false);
+    showError(error.message || "Excel-Export fehlgeschlagen.");
+  }
+};
 
 let envMeta = null;
 let envMetaPromise = null;
@@ -743,6 +909,8 @@ const rsrd2JobOffsets = {};
 const rsrd2JobStartTimes = {};
 
 let overlayShownAt = 0;
+let overlayPinnedOpen = false;
+let excelExportObjectUrl = "";
 
 const disableAllRenumberButtons = () => {
   renumberButtons.forEach((button) => {
@@ -769,6 +937,50 @@ const setRandomOverlayImage = (enabled) => {
   }
 };
 
+const setOverlaySpinner = (enabled) => {
+  if (!loaderSpinner) return;
+  loaderSpinner.classList.toggle("hidden", !enabled);
+};
+
+const setOverlayPinned = (enabled) => {
+  overlayPinnedOpen = Boolean(enabled);
+  if (loaderCloseBtn) {
+    loaderCloseBtn.classList.toggle("hidden", !overlayPinnedOpen);
+  }
+};
+
+const setOverlayMessage = (text) => {
+  if (!loaderMessageBox) return;
+  const value = String(text || "").trim();
+  loaderMessageBox.textContent = value;
+  loaderMessageBox.classList.toggle("hidden", !value);
+};
+
+const setOverlayActionVisible = (visible) => {
+  if (!loaderActionBtn) return;
+  loaderActionBtn.classList.toggle("hidden", !visible);
+};
+
+const setOverlayProgressVisible = (visible) => {
+  if (progressWrapper) progressWrapper.classList.toggle("hidden", !visible);
+  if (progressDetail) progressDetail.classList.toggle("hidden", !visible);
+};
+
+const setOverlayDownloadLink = (url, label, filename = "") => {
+  if (!loaderDownloadLink) return;
+  const hasUrl = Boolean(url);
+  loaderDownloadLink.classList.toggle("hidden", !hasUrl);
+  if (!hasUrl) {
+    loaderDownloadLink.removeAttribute("href");
+    loaderDownloadLink.removeAttribute("download");
+    loaderDownloadLink.textContent = "Download Excel";
+    return;
+  }
+  loaderDownloadLink.href = url;
+  if (filename) loaderDownloadLink.setAttribute("download", filename);
+  loaderDownloadLink.textContent = label || "Download Excel";
+};
+
 const setTeilenummerRandomImage = () => {
   if (!loaderRandomImage || !loaderRandomImageWrap) return;
   const imageIndex = Math.floor(Math.random() * 6) + 1;
@@ -781,16 +993,28 @@ const setTeilenummerRandomImage = () => {
   loaderRandomImage.alt = `Statusbild ${imageIndex}`;
 };
 
-const showOverlay = ({ showRandomImage = true } = {}) => {
+const showOverlay = ({ showRandomImage = true, showProgress = true } = {}) => {
   overlayShownAt = Date.now();
+  setOverlayPinned(false);
   loaderOverlay.classList.remove("hidden");
+  setOverlayMessage("");
+  setOverlayActionVisible(false);
+  setOverlayDownloadLink("", "");
+  setOverlayProgressVisible(showProgress);
   const shouldShowImage = showRandomImage && !renumberSequence;
   setRandomOverlayImage(shouldShowImage);
+  setOverlaySpinner(!shouldShowImage);
 };
 
 const showOverlayWithImage = (src, alt, statusMessage) => {
   overlayShownAt = Date.now();
+  setOverlayPinned(false);
   loaderOverlay.classList.remove("hidden");
+  setOverlayMessage("");
+  setOverlayActionVisible(false);
+  setOverlayDownloadLink("", "");
+  setOverlayProgressVisible(true);
+  setOverlaySpinner(false);
   if (loaderRandomImageWrap && loaderRandomImage) {
     loaderRandomImageWrap.classList.remove("hidden");
     loaderRandomImage.src = src;
@@ -1748,6 +1972,14 @@ const applyFilters = () => {
     wagons = wagons.filter((row) => teilenummerExcelMappings.has(toTeilenummerKey(row.A_ITNO, row.A_SERN)));
   }
 
+  if (currentModule === "teilenummer") {
+    wagons.sort((a, b) => {
+      const left = String(a?.W_SERN || "");
+      const right = String(b?.W_SERN || "");
+      return left.localeCompare(right, "de-CH", { numeric: true, sensitivity: "base" });
+    });
+  }
+
   currentPage = 1;
   updateCountInfo();
   renderPage();
@@ -1755,21 +1987,77 @@ const applyFilters = () => {
 
 const resetTeilenummerGo = () => {
   if (!teilenummerGoBtn) return;
-  teilenummerGoBtn.classList.add("hidden");
   teilenummerGoBtn.textContent = "GO (0)";
   teilenummerGoBtn.dataset.count = "0";
+  teilenummerGoBtn.classList.remove("go-cta--active");
+  teilenummerGoBtn.classList.add("go-cta--idle");
 };
 
 const showTeilenummerGo = (count) => {
   if (!teilenummerGoBtn) return;
   const safeCount = Number.isFinite(count) ? count : Number(count) || 0;
-  if (safeCount <= 0) {
-    resetTeilenummerGo();
-    return;
-  }
   teilenummerGoBtn.textContent = `GO (${safeCount})`;
   teilenummerGoBtn.dataset.count = String(safeCount);
-  teilenummerGoBtn.classList.remove("hidden");
+  if (safeCount > 0) {
+    teilenummerGoBtn.classList.remove("go-cta--idle");
+    teilenummerGoBtn.classList.add("go-cta--active");
+  } else {
+    teilenummerGoBtn.classList.remove("go-cta--active");
+    teilenummerGoBtn.classList.add("go-cta--idle");
+  }
+};
+
+const formatApiLogEntry = (entry) => {
+  if (!entry || typeof entry !== "object") return String(entry ?? "");
+  const ts = entry.ts || "";
+  const action = entry.action || "";
+  const ok = entry.ok === true ? "OK" : entry.ok === false ? "NOK" : "";
+  const error = entry.error || "";
+  const wagon = entry.wagon || {};
+  const itno = wagon.itno || "";
+  const sern = wagon.sern || "";
+  const reqUrl = (entry.request || {}).url || "";
+  return `${ts} | ${action} | ${ok} | ${itno}/${sern}${error ? ` | ${error}` : ""}${reqUrl ? `\n${reqUrl}` : ""}`;
+};
+
+const renderApiLogContent = (entries) => {
+  if (!apiLogContent) return;
+  if (!Array.isArray(entries) || !entries.length) {
+    apiLogContent.textContent = "API-Log ist leer.";
+    return;
+  }
+  apiLogContent.textContent = entries.map(formatApiLogEntry).join("\n\n");
+};
+
+const loadApiLog = async () => {
+  if (!apiLogContent) return;
+  apiLogContent.textContent = "Lade API-Log ...";
+  try {
+    const data = await fetchJSON(withEnv("/api/teilenummer/api_log?limit=1500"));
+    renderApiLogContent(data?.entries || []);
+  } catch (error) {
+    apiLogContent.textContent = error.message || "API-Log konnte nicht geladen werden.";
+  }
+};
+
+const showApiLogModal = async () => {
+  if (!apiLogModal) return;
+  if (apiLogContent) {
+    apiLogContent.textContent = "Lade API-Log ...";
+  }
+  apiLogModal.classList.remove("hidden");
+  apiLogModal.setAttribute("aria-hidden", "false");
+  await loadApiLog();
+};
+
+const hideApiLogModal = () => {
+  if (!apiLogModal) return;
+  apiLogModal.classList.add("hidden");
+  apiLogModal.setAttribute("aria-hidden", "true");
+};
+
+window.__openApiLogModal = () => {
+  void showApiLogModal();
 };
 
 const setTeilenummerControlsDisabled = (disabled) => {
@@ -1782,7 +2070,8 @@ const runCheckToggle = async (checked) => {
   if (currentModule !== "teilenummer") return;
   if (!wagons.length) return;
   setStatus(checked ? "Markiere Datensätze ..." : "Entferne Markierungen ...");
-  showOverlayWithImage("bilder/animierte_sanduhr.gif", "Bitte warten");
+  showOverlay({ showRandomImage: false, showProgress: false });
+  setOverlayProgressVisible(false);
   try {
     const delayPayload = currentDelayPayload();
     for (const row of wagons) {
@@ -1816,8 +2105,13 @@ const loadTeilenummerExcelMappings = async () => {
     return;
   }
   const file = excelUploadInput.files[0];
-  setStatus("Prüfe Excel-Mapping ...");
-  showOverlayWithImage("bilder/6-Bild.png", "Bitte warten");
+  setStatus("Excel wird geprüft ...");
+  showOverlay({ showRandomImage: false, showProgress: false });
+  setOverlayMessage("");
+  setOverlaySpinner(true);
+  setOverlayProgressVisible(false);
+  setOverlayActionVisible(false);
+  let keepOverlayOpen = false;
   try {
     const toBase64 = (arrayBuffer) => {
       let binary = "";
@@ -1839,11 +2133,32 @@ const loadTeilenummerExcelMappings = async () => {
         ...currentDelayPayload(),
       }),
     });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || "Excel-Validierung fehlgeschlagen.");
+    const responseText = await response.text();
+    let responsePayload = null;
+    if (responseText) {
+      try {
+        responsePayload = JSON.parse(responseText);
+      } catch {
+        responsePayload = null;
+      }
     }
-    const payload = await response.json();
+    if (!response.ok) {
+      let errorMessage = "Excel-Validierung fehlgeschlagen.";
+      const detail = responsePayload?.detail;
+      if (typeof detail === "string" && detail.trim()) {
+        errorMessage = detail;
+      } else if (detail && typeof detail === "object") {
+        if (detail.message) errorMessage = String(detail.message);
+        showTeilenummerExcelValidationPopup(detail, true);
+        keepOverlayOpen = true;
+      } else if (responseText) {
+        errorMessage = responseText;
+      }
+      throw new Error(errorMessage);
+    }
+    const payload = responsePayload || {};
+    showTeilenummerExcelValidationPopup(payload, false);
+    keepOverlayOpen = true;
     const mappings = Array.isArray(payload.mappings) ? payload.mappings : [];
     const mappingMap = new Map();
     mappings.forEach((entry) => {
@@ -1876,22 +2191,60 @@ const loadTeilenummerExcelMappings = async () => {
     teilenummerExcelFilename = "";
     updateExcelUploadInfo();
     applyFilters();
-    showError(error.message || "Excel-Validierung fehlgeschlagen.");
+    if (!keepOverlayOpen) {
+      setStatus(error.message || "Excel-Validierung fehlgeschlagen.");
+      setOverlayPinned(true);
+      setOverlaySpinner(false);
+      setOverlayProgressVisible(false);
+      setOverlayActionVisible(false);
+      setOverlayMessage(error.message || "Excel-Validierung fehlgeschlagen.");
+      keepOverlayOpen = true;
+    }
   } finally {
-    hideOverlay();
+    if (!keepOverlayOpen) {
+      hideOverlay();
+    }
   }
 };
 
 const prepareTeilenummerTausch = async () => {
   if (currentModule !== "teilenummer") return;
   const newItno = newItnoInput?.value.trim() || "";
+  const newSern = newSernInput?.value.trim() || "";
   const mappings = Array.from(teilenummerExcelMappings.values());
+  const hasCheckedRows = allWagons.some((row) => String(row.CHECKED || "").trim() === "1");
+  if (!hasCheckedRows) {
+    setStatus("Keine Position markiert. Leere Tausch-DB ...");
+    showOverlay({ showRandomImage: false, showProgress: false });
+    setOverlaySpinner(true);
+    setOverlayProgressVisible(false);
+    setOverlayActionVisible(false);
+    try {
+      const data = await fetchJSON(withEnv("/api/teilenummer/clear_tausch"), { method: "POST" });
+      resetTeilenummerGo();
+      setOverlaySpinner(false);
+      setOverlayPinned(true);
+      setOverlayMessage(
+        `Keine Position markiert.\nTausch-DB wurde geleert (${Number(data?.cleared || 0)} Einträge).`,
+      );
+    } catch (error) {
+      setOverlaySpinner(false);
+      setOverlayPinned(true);
+      setOverlayMessage(error.message || "Tausch-DB konnte nicht geleert werden.");
+    }
+    return;
+  }
+  const checkedRows = allWagons.filter((row) => String(row.CHECKED || "").trim() === "1");
+  if (newSern && checkedRows.length > 1 && !mappings.length) {
+    window.alert("Mit Neue SERN ist nur eine markierte Position erlaubt.");
+    return;
+  }
   if (!newItno && !mappings.length) {
     window.alert("Bitte eine neue ITNO eingeben.");
     return;
   }
   setStatus("Erstelle Tauschdaten ...");
-  showOverlayWithImage("bilder/6-Bild.png", "Bitte warten");
+  showOverlay({ showRandomImage: false });
   setIndeterminate(true);
   try {
     const data = await fetchJSON(withEnv("/api/teilenummer/prepare"), {
@@ -1899,7 +2252,7 @@ const prepareTeilenummerTausch = async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         new_itno: newItno,
-        new_sern: "",
+        new_sern: newSern,
         mappings,
         ...currentDelayPayload(),
       }),
@@ -1914,7 +2267,8 @@ const prepareTeilenummerTausch = async () => {
 
 const runTeilenummerGo = async () => {
   if (currentModule !== "teilenummer") return;
-  if (teilenummerGoBtn?.classList.contains("hidden")) {
+  const goCount = Number(teilenummerGoBtn?.dataset?.count || "0");
+  if (!Number.isFinite(goCount) || goCount <= 0) {
     window.alert("Bitte zuerst 'Jetzt tauschen' ausführen.");
     return;
   }
@@ -1988,6 +2342,15 @@ const renderPage = () => {
 
   rows.forEach((wagon) => {
     const tr = document.createElement("tr");
+    const teilenummerStatus = String(wagon.A_STAT || "").trim();
+    const wagonStatus = String(wagon.W_STAT || "").trim();
+    const hasTeilenummerWarningStatus =
+      currentModule === "teilenummer" && Boolean(teilenummerStatus) && teilenummerStatus !== "20";
+    const hasWagonWarningStatus =
+      currentModule === "teilenummer" && Boolean(wagonStatus) && wagonStatus !== "20";
+    if (hasTeilenummerWarningStatus) {
+      tr.classList.add("teilenummer-row-status-warning");
+    }
     columnOrder.forEach((key) => {
       const td = document.createElement("td");
       if (key === "OBJSTRK") {
@@ -2033,6 +2396,23 @@ const renderPage = () => {
           }
         }
         td.textContent = cellValue;
+        if (hasWagonWarningStatus && (key === "W_ITNO" || key === "W_SERN")) {
+          td.classList.add("wagon-status-warning-cell");
+        }
+        if (hasWagonWarningStatus && key === "W_ITNO") {
+          const wagonStatusLine = document.createElement("small");
+          wagonStatusLine.className = "status-warning-line";
+          wagonStatusLine.textContent = `Status: ${wagonStatus}`;
+          td.appendChild(document.createElement("br"));
+          td.appendChild(wagonStatusLine);
+        }
+        if (hasTeilenummerWarningStatus && key === "A_ITNO") {
+          const statusLine = document.createElement("small");
+          statusLine.className = "status-warning-line";
+          statusLine.textContent = `Status: ${teilenummerStatus}`;
+          td.appendChild(document.createElement("br"));
+          td.appendChild(statusLine);
+        }
         if (currentModule === "teilenummer" && (key === "A_ITNO" || key === "A_SERN")) {
           const mapping = teilenummerExcelMappings.get(toTeilenummerKey(wagon.A_ITNO, wagon.A_SERN));
           if (mapping) {
@@ -2041,7 +2421,6 @@ const renderPage = () => {
               const mappedLine = document.createElement("small");
               mappedLine.className = "mapping-line";
               mappedLine.textContent = mappedValue;
-              td.appendChild(document.createElement("br"));
               td.appendChild(mappedLine);
             }
           }
@@ -5071,6 +5450,88 @@ if (partsResultsBody) {
     if (selectBtn) {
       const rowIndex = Number(selectBtn.dataset.rowIndex);
       submitReplacementSelection(rowIndex);
+    }
+  });
+}
+if (loaderCloseBtn) {
+  loaderCloseBtn.addEventListener("click", () => {
+    setOverlayPinned(false);
+    loaderOverlay.classList.add("hidden");
+    setOverlaySpinner(false);
+    setOverlayMessage("");
+    setOverlayActionVisible(false);
+    setOverlayDownloadLink("", "");
+    setRandomOverlayImage(false);
+    clearOverlayContext();
+  });
+}
+if (loaderActionBtn) {
+  loaderActionBtn.addEventListener("click", () => {
+    setOverlayPinned(false);
+    loaderOverlay.classList.add("hidden");
+    setOverlaySpinner(false);
+    setOverlayMessage("");
+    setOverlayActionVisible(false);
+    setOverlayDownloadLink("", "");
+    setRandomOverlayImage(false);
+    clearOverlayContext();
+  });
+}
+if (exportSelectionBtn) {
+  exportSelectionBtn.addEventListener("click", () => {
+    exportTeilenummerSelection();
+  });
+}
+if (apiLogBtn) {
+  apiLogBtn.addEventListener("click", () => {
+    window.open(withEnv("/api/teilenummer/api_log/view"), "_blank", "noopener");
+  });
+}
+if (closeApiLogBtn) {
+  closeApiLogBtn.addEventListener("click", () => {
+    hideApiLogModal();
+  });
+}
+if (apiLogModal) {
+  apiLogModal.addEventListener("click", (event) => {
+    if (event.target === apiLogModal) {
+      hideApiLogModal();
+    }
+  });
+}
+if (clearApiLogBtn) {
+  clearApiLogBtn.addEventListener("click", async () => {
+    try {
+      await fetchJSON(withEnv("/api/teilenummer/api_log/clear"), { method: "POST" });
+      await loadApiLog();
+    } catch (error) {
+      if (apiLogContent) {
+        apiLogContent.textContent = error.message || "API-Log konnte nicht gelöscht werden.";
+      }
+    }
+  });
+}
+if (exportApiLogCsvBtn) {
+  exportApiLogCsvBtn.addEventListener("click", async () => {
+    try {
+      const response = await fetch(withEnv("/api/teilenummer/api_log.csv"));
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || "CSV-Export fehlgeschlagen.");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `API_${buildExportTimestamp()}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      if (apiLogContent) {
+        apiLogContent.textContent = error.message || "CSV-Export fehlgeschlagen.";
+      }
     }
   });
 }

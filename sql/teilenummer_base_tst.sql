@@ -13,6 +13,7 @@ select
   c.SERN as "C_SERN",
   d.HISN as "W_SERN",
   d.HIIT as "W_ITNO",
+  w.STAT as "W_STAT",
   d.RGDT as "RGDT",
   d.RGTM as "RGTM"
 from MILOIN a
@@ -31,6 +32,10 @@ left outer join MROUHI d
   and d.REMD = 0
   and d.REDN = 0
   and d.RSCD = ''
+left outer join MILOIN w
+  on w.CONO = d.CONO
+  and w.ITNO = d.HIIT
+  and w.SERN = d.HISN
 where a.STAT < 99
   and a.EQTP <> '100'
   and a.CONO = '881'

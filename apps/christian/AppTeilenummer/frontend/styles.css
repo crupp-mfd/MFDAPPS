@@ -346,9 +346,83 @@ body[data-default-module="rsrd2"] .rsrd2-actions .ids-button:hover {
 }
 
 .loader-card {
+  position: relative;
   text-align: center;
   width: min(92vw, 640px);
   padding: 0.12rem 0.8rem 0.22rem;
+}
+
+.loader-close-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2937;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.loader-close-btn.hidden {
+  display: none;
+}
+
+.loader-spinner {
+  width: 34px;
+  height: 34px;
+  margin: 0.35rem auto 0.45rem;
+  border: 3px solid #d6dee8;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: loader-spin 0.9s linear infinite;
+}
+
+.loader-spinner.hidden {
+  display: none;
+}
+
+.loader-message-box {
+  margin: 0.25rem auto 0.45rem;
+  width: min(620px, 90vw);
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  text-align: left;
+  font-family: "Source Sans Pro", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1.25;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px 10px;
+  color: #1f2937;
+}
+
+.loader-message-box.hidden {
+  display: none;
+}
+
+.loader-download-link {
+  display: inline-block;
+  margin: 0.2rem auto 0.45rem;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+
+.loader-download-link.hidden {
+  display: none;
+}
+
+@keyframes loader-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .loader-card h1 {
@@ -758,6 +832,25 @@ label[for="customerNameFilter"],
 .table-header-summary p {
   margin: 0 !important;
   white-space: nowrap;
+}
+
+.export-selection-btn {
+  width: 24px;
+  height: 24px;
+  border: 1px solid #2e7d32;
+  border-radius: 6px;
+  background: #e8f5e9;
+  color: #1b5e20;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 8px;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.export-selection-btn:hover {
+  background: #d7edd9;
 }
 
 .table-header-summary p#countInfo {
@@ -2430,7 +2523,7 @@ body[data-default-module="teilenummer"] {
 body[data-default-module="teilenummer"] .m3-header,
 body[data-default-module="teilenummer"] #wagonsView.layout,
 body[data-default-module="teilenummer"] #wagonsView .card {
-  max-width: 1300px;
+  max-width: 1430px;
 }
 
 body[data-default-module="teilenummer"] .m3-header {
@@ -2755,7 +2848,7 @@ body[data-default-module="teilenummer"] .teilenummer-filter-shell .filter-grid {
   grid-template-columns: repeat(7, minmax(120px, 1fr)) !important;
   grid-template-areas:
     "stat itno sern alii eqtp whlo whsl"
-    "faci hitn hser witno wsern . ." !important;
+    "faci hitn hser witno wsern clear ." !important;
   gap: 8px !important;
   width: 100% !important;
 }
@@ -2788,16 +2881,35 @@ body[data-default-module="teilenummer"] .teilenummer-filter-shell .filter-field 
 }
 
 body[data-default-module="teilenummer"] .teilenummer-filter-shell .filter-field--wsern .combo {
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr) 34px !important;
-  gap: 6px !important;
+  width: 100% !important;
 }
 
 body[data-default-module="teilenummer"] .teilenummer-filter-shell .filter-clear-btn {
+  position: static !important;
   width: 34px !important;
   min-width: 34px !important;
   height: 30px !important;
   margin: 0 !important;
+  border: 1px solid #efb2b2 !important;
+  background: #fdeaea !important;
+  color: #8b1f1f !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .filter-clear-btn:hover {
+  background: #fbd5d5 !important;
+  border-color: #ea9b9b !important;
+  box-shadow: none !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .filter-field--clear {
+  grid-area: clear !important;
+  align-items: flex-start !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .filter-field--clear .filter-label {
+  visibility: hidden !important;
 }
 
 body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row {
@@ -2891,9 +3003,9 @@ body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-a
 }
 
 body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-input-wrap--file {
-  width: 450px !important;
-  flex: 0 0 450px !important;
-  margin-left: 18px !important;
+  width: 300px !important;
+  flex: 0 0 300px !important;
+  margin-left: 4px !important;
   transform: translateY(-3px) !important;
 }
 
@@ -2993,6 +3105,93 @@ body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-a
   flex: 0 0 74px !important;
 }
 
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row #teilenummerGoBtn.go-cta--idle {
+  background: #e9f8eb !important;
+  border-color: #b6e2bb !important;
+  color: #1e6a2f !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row #teilenummerGoBtn.go-cta--active {
+  background: #fdeaea !important;
+  border-color: #efb2b2 !important;
+  color: #8b1f1f !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row #apiLogBtn {
+  min-width: 56px !important;
+  flex: 0 0 56px !important;
+  padding: 0 8px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 4px !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row #apiLogBtn svg {
+  width: 12px;
+  height: 12px;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row #apiLogBtn span {
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.api-log-modal-content {
+  position: relative !important;
+  width: min(1000px, 92vw);
+  min-height: 280px;
+}
+
+.api-log-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.4rem 0 0.6rem;
+}
+
+.api-log-content {
+  margin: 0;
+  max-height: 56vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-input-wrap--sern {
+  flex: 0 0 140px !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-divider-left {
+  border-left: 1px solid #d5deea !important;
+  padding-left: 10px !important;
+  margin-left: 6px !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-block--mapping {
+  background: #f7fbff !important;
+  border: 1px solid #dbe9f8 !important;
+  border-radius: 8px !important;
+  padding: 4px 6px !important;
+}
+
+body[data-default-module="teilenummer"] .delay-input-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+body[data-default-module="teilenummer"] .delay-min {
+  font-size: 10px;
+  color: #64748b;
+  font-weight: 700;
+}
+
 body[data-default-module="teilenummer"] thead .mark-col {
   width: 92px !important;
   min-width: 92px !important;
@@ -3003,6 +3202,29 @@ body[data-default-module="teilenummer"] thead .mark-col {
 body[data-default-module="teilenummer"] tbody .mark-col {
   width: 32px !important;
   min-width: 32px !important;
+}
+
+body[data-default-module="teilenummer"] tbody tr.teilenummer-row-status-warning td {
+  background: #fff4f4 !important;
+  color: #1f2937 !important;
+  font-weight: 400 !important;
+}
+
+body[data-default-module="teilenummer"] .status-warning-line {
+  display: inline-block;
+  margin-top: 1px;
+  font-size: 10px;
+  line-height: 1.1;
+  color: #1f2937;
+  background: #ffecec;
+  border: 1px solid #f6cfcf;
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+body[data-default-module="teilenummer"] td.wagon-status-warning-cell {
+  color: #b91c1c !important;
+  font-weight: 700 !important;
 }
 
 body[data-default-module="teilenummer"] .check-inline-btn {
@@ -3030,4 +3252,110 @@ body[data-default-module="teilenummer"] .check-inline-btn:hover {
   body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row {
     flex-wrap: wrap !important;
   }
+}
+
+/* Action row grouped layout (identity | mapping+delay | actions | log) */
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: stretch !important;
+  gap: 8px !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group {
+  display: flex !important;
+  align-items: flex-end !important;
+  gap: 8px !important;
+  background: #f7fbff !important;
+  border: 1px solid #dbe9f8 !important;
+  border-radius: 8px !important;
+  padding: 6px 8px !important;
+  height: 66px !important;
+  box-sizing: border-box !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group--identity {
+  flex: 0 0 auto !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group--mapping {
+  flex: 1 1 auto !important;
+  gap: 2px !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group--actions {
+  flex: 0 0 auto !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group--log {
+  flex: 0 0 auto !important;
+  justify-content: center !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group .action-input-wrap,
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group .delay-input-wrap {
+  margin: 0 !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group--identity .action-input-wrap[for="newItnoInput"] {
+  width: 145px !important;
+  flex: 0 0 145px !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group--identity .action-input-wrap--sern {
+  width: 145px !important;
+  flex: 0 0 145px !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group--mapping .action-input-wrap--file {
+  width: 258px !important;
+  flex: 0 0 258px !important;
+  margin-left: 0 !important;
+  transform: none !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group--mapping .delay-input-wrap {
+  width: 152px !important;
+  flex: 0 0 152px !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group--actions .ids-button {
+  transform: none !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group--actions #reloadBtn {
+  min-width: 122px !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group--actions #teilenummerGoBtn {
+  min-width: 80px !important;
+  flex: 0 0 80px !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row .action-group--log #apiLogBtn {
+  transform: none !important;
+  min-width: 64px !important;
+  flex: 0 0 64px !important;
+}
+
+@media (max-width: 1560px) {
+  body[data-default-module="teilenummer"] .teilenummer-filter-shell .teilenummer-action-row {
+    flex-wrap: wrap !important;
+  }
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .excel-upload-control {
+  height: auto !important;
+  min-height: 28px !important;
+  align-items: flex-start !important;
+}
+
+body[data-default-module="teilenummer"] .teilenummer-filter-shell .excel-upload-name {
+  white-space: normal !important;
+  line-height: 1.1 !important;
+  max-height: 24px !important;
+  display: inline-block !important;
+  overflow: hidden !important;
+  text-overflow: clip !important;
+  word-break: break-word !important;
 }

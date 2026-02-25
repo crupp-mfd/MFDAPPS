@@ -23,13 +23,16 @@ from datetime import datetime, date, timedelta
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Body, Response, Request
 import logging
-from fastapi.responses import PlainTextResponse, JSONResponse, FileResponse, RedirectResponse
+from fastapi.responses import PlainTextResponse, JSONResponse, FileResponse, RedirectResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import psycopg
 import httpx
 from openai import OpenAI
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell import WriteOnlyCell
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 try:
     from sparepart_shared.auth import is_basic_auth_valid
@@ -274,6 +277,9 @@ MOS180_RETRY_DELAY_SEC = float(os.getenv("SPAREPART_MOS180_RETRY_DELAY", "3").st
 MOS180_RETRY_MAX = int(os.getenv("SPAREPART_MOS180_RETRY_MAX", "10").strip() or "10")
 MOS050_RETRY_DELAY_SEC = float(os.getenv("SPAREPART_MOS050_RETRY_DELAY", "3").strip() or "3")
 MOS050_RETRY_MAX = int(os.getenv("SPAREPART_MOS050_RETRY_MAX", "10").strip() or "10")
+TEILENUMMER_PHASE_SPLIT_WAIT_SEC = 5
+TEILENUMMER_CMS100_RETRY_DELAY_SEC = 3.0
+TEILENUMMER_CMS100_RETRY_MAX = 10
 WAGON_MOS100_RETRY_MAX = int(os.getenv("SPAREPART_WAGON_MOS100_RETRY_MAX", "8").strip() or "8")
 WAGON_RENUMBER_SKIP_MOS170 = os.getenv("SPAREPART_WAGON_RENUMBER_SKIP_MOS170", "").strip().lower() in {"1", "true", "yes", "y"}
 WAGON_RENUMBER_FIXED_PLPN = os.getenv("SPAREPART_WAGON_RENUMBER_FIXED_PLPN", "").strip()
@@ -1766,12 +1772,7 @@ def _ips_company_division(env: str | None) -> tuple[str, str]:
     normalized = _normalize_env(env or DEFAULT_ENV)
     if normalized == "tst" and (IPS_COMPANY_TST or IPS_DIVISION_TST):
         return IPS_COMPANY_TST, IPS_DIVISION_TST
-    company = IPS_COMPANY
-    division = IPS_DIVISION
-    # Keep IPS on the same company as MI if no dedicated IPS company is configured.
-    if not company:
-        company = _mi_cono(normalized)
-    return company, division
+    return IPS_COMPANY, IPS_DIVISION
 
 
 def _mi_cono(env: str | None) -> str:
@@ -1851,6 +1852,17 @@ def _call_ips_service(
         "text": resp.text,
         "request_body": body,
     }
+
+
+def _ips_mos100_already_exists_fault(response: Any) -> bool:
+    if not isinstance(response, dict):
+        return False
+    text = str(response.get("text") or "").lower()
+    return (
+        "origin identity" in text
+        and "already exists" in text
+        and "reclassification not possible" in text
+    )
 
 
 def _append_api_log(
@@ -2048,9 +2060,6 @@ def _build_mos125_params(row: sqlite3.Row, mode: str = "out", env: str | None = 
         params["NHSR"] = _row_value(row, "SERN")
         params["ITNR"] = _row_value(row, "ITNO")
         params["BANR"] = _row_value(row, "SER2")
-    cono = _mi_cono(env)
-    if cono:
-        params["CONO"] = cono
     return params
 
 
@@ -2066,9 +2075,6 @@ def _build_mos170_params(row: sqlite3.Row, env: str | None = None) -> Dict[str, 
         "RESP": "CHRUPP",
         "WHLO": "ZUM",
     }
-    cono = _mi_cono(env)
-    if cono:
-        params["CONO"] = cono
     return params
 
 
@@ -2091,9 +2097,6 @@ def _build_mos170_wagon_params(
         "RESP": "CHRUPP",
         "WHLO": whlo,
     }
-    cono = _mi_cono(env)
-    if cono:
-        params["CONO"] = cono
     return params
 # END WAGON RENNUMBERING
 
@@ -2118,10 +2121,103 @@ def _build_cms100_params(plpn: str, env: str | None = None) -> Dict[str, str]:
         "QOPLPS": "0",
         "QOPLP2": "0",
     }
-    cono = _mi_cono(env)
+    return params
+
+
+def _default_mi_cono_for_env(env: str | None) -> str:
+    normalized = _normalize_env(env or DEFAULT_ENV)
+    if normalized == "tst":
+        return "881"
+    if normalized == "prd":
+        return "860"
+    return ""
+
+
+def _build_mos450_lstcomponent_params(
+    motp: str,
+    env: str | None = None,
+) -> Dict[str, str]:
+    # Fachvorgabe: MOS450MI/LstComponent immer mit MOTP prüfen (nicht HITN).
+    cono = _default_mi_cono_for_env(env).strip()
+    params: Dict[str, str] = {"MOTP": str(motp or "").strip()}
     if cono:
         params["CONO"] = cono
     return params
+
+
+def _build_mos450_addcomponent_params(
+    motp: str,
+    mtrl: str,
+    cfgl: str,
+    env: str | None = None,
+) -> Dict[str, str]:
+    cono = _default_mi_cono_for_env(env).strip()
+    params: Dict[str, str] = {
+        "MOTP": str(motp or "").strip(),
+        "MTRL": str(mtrl or "").strip(),
+        "CFGL": str(cfgl or "").strip(),
+    }
+    if cono:
+        params["CONO"] = cono
+    return params
+
+
+def _row_contains_item_number(row: Mapping[str, Any], item_number: str) -> bool:
+    target = str(item_number or "").strip().upper()
+    if not target:
+        return False
+    for key, raw_value in row.items():
+        value = str(raw_value or "").strip().upper()
+        if not value:
+            continue
+        key_upper = str(key or "").strip().upper()
+        if value == target and (
+            key_upper in {"ITNO", "CMIT", "CMITNO", "COMP", "COMPONENT", "CPIT", "MITN", "MTRL"}
+            or "ITN" in key_upper
+            or "COMP" in key_upper
+            or "MTRL" in key_upper
+        ):
+            return True
+    return False
+
+
+def _mos450_allows_component(response: Any, candidate_itno: str) -> bool:
+    rows = _extract_mi_rows({"response": response})
+    if not rows:
+        return False
+    return any(_row_contains_item_number(row, candidate_itno) for row in rows)
+
+
+def _mos450_component_status20(response: Any, component_itno: str) -> tuple[bool, str]:
+    rows = _extract_mi_rows({"response": response})
+    target = str(component_itno or "").strip().upper()
+    if not rows or not target:
+        return False, "Komponente nicht gefunden."
+
+    seen_statuses: List[str] = []
+    for row in rows:
+        mtrl = str(row.get("MTRL") or row.get("mtrl") or "").strip().upper()
+        if mtrl != target:
+            continue
+        stat = str(row.get("STAT") or row.get("stat") or "").strip()
+        if stat == "20":
+            return True, "OK: Komponente vorhanden mit Status 20."
+        if stat:
+            seen_statuses.append(stat)
+
+    if seen_statuses:
+        statuses = ", ".join(sorted(set(seen_statuses)))
+        return False, f"Komponente gefunden, aber Status ist nicht 20 ({statuses})."
+    return False, "Komponente nicht gefunden."
+
+
+def _is_mos450_soft_validation_failure(message: str) -> bool:
+    text = str(message or "").lower()
+    return (
+        "komponente nicht gefunden" in text
+        or "status ist nicht 20" in text
+        or ("komponente" in text and "motp" in text)
+    )
 
 
 def _build_ips_mos100_params(row: sqlite3.Row) -> Dict[str, str]:
@@ -2144,9 +2240,6 @@ def _build_mos180_params(row: sqlite3.Row, env: str | None = None) -> Dict[str, 
         "RESP": MOS180_RESP,
         "APRB": MOS180_APRB,
     }
-    cono = _mi_cono(env)
-    if cono:
-        params["CONO"] = cono
     return params
 
 
@@ -4797,47 +4890,191 @@ def teilenummer_validate_excel(
     table_name = _ensure_wagon_data(TEILENUMMER_TABLE, env)
     with _connect() as conn:
         rows = conn.execute(
-            f'SELECT "A_ITNO", "A_SERN", "RGDT", "RGTM" FROM "{table_name}"'
+            f'SELECT "A_ITNO", "A_SERN", "C_MTRL", "RGDT", "RGTM" FROM "{table_name}"'
         ).fetchall()
+    rows = [dict(row) for row in rows]
 
-    existing_itnos = {str(row["A_ITNO"] or "").strip() for row in rows if row["A_ITNO"]}
-    existing_serns = {str(row["A_SERN"] or "").strip() for row in rows if row["A_SERN"]}
+    def _norm_itno(value: Any) -> str:
+        return str(value or "").strip().upper()
+
+    def _norm_sern(value: Any) -> str:
+        return re.sub(r"[\s\-]+", "", str(value or "").strip().upper())
+
+    def _norm_pair(itno_value: Any, sern_value: Any) -> str:
+        return f"{_norm_itno(itno_value)}||{_norm_sern(sern_value)}"
+
+    existing_itnos = {_norm_itno(row["A_ITNO"]) for row in rows if row["A_ITNO"]}
+    existing_serns = {_norm_sern(row["A_SERN"]) for row in rows if row["A_SERN"]}
     existing_pairs = {
-        f'{str(row["A_ITNO"] or "").strip()}||{str(row["A_SERN"] or "").strip()}'
+        _norm_pair(row["A_ITNO"], row["A_SERN"])
         for row in rows
         if row["A_ITNO"] and row["A_SERN"]
     }
     rows_by_key = {
-        f'{str(row["A_ITNO"] or "").strip()}||{str(row["A_SERN"] or "").strip()}': row
+        _norm_pair(row["A_ITNO"], row["A_SERN"]): row
         for row in rows
         if row["A_ITNO"] and row["A_SERN"]
     }
 
     validated: List[Dict[str, str]] = []
+    validation_checks: List[Dict[str, Any]] = []
+    validation_errors: List[str] = []
+    normalized_env = _normalize_env(env)
+    env_label = normalized_env.upper()
+    cono_value = _default_mi_cono_for_env(env).strip()
+    ionapi_path = _ionapi_path(env, "mi")
+    ion_cfg = load_ionapi_config(str(ionapi_path))
+    base_url = build_base_url(ion_cfg)
+    token = get_access_token_service_account(ion_cfg)
+    mos450_cache: Dict[str, tuple[bool, str]] = {}
     for entry in mappings:
         row_label = entry["row"]
         old_itno = entry["old_itno"]
         old_sern = entry["old_sern"]
         new_itno = entry["new_itno"]
         new_sern = entry["new_sern"]
-        old_key = f"{old_itno}||{old_sern}"
+        old_key = _norm_pair(old_itno, old_sern)
 
         if old_key not in existing_pairs:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Excel ungültig: Zeile {row_label}: alte Position {old_itno}/{old_sern} existiert nicht im System.",
+            validation_error = (
+                f"Zeile {row_label}: alte Position {old_itno}/{old_sern} existiert nicht im System."
             )
-        if new_itno not in existing_itnos:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Excel ungültig: Zeile {row_label}: neue ITNO '{new_itno}' existiert nicht im System.",
+            validation_checks.append(
+                {
+                    "row": int(row_label),
+                    "old_itno": old_itno,
+                    "old_sern": old_sern,
+                    "new_itno": new_itno,
+                    "new_sern": new_sern,
+                    "allowed": False,
+                    "cono": cono_value,
+                    "message": validation_error,
+                }
             )
-        if new_sern in existing_serns:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Excel ungültig: Zeile {row_label}: neue SERN '{new_sern}' existiert bereits im System.",
+            validation_errors.append(validation_error)
+            continue
+        if _norm_itno(new_itno) not in existing_itnos:
+            validation_error = f"Zeile {row_label}: neue ITNO '{new_itno}' existiert nicht im System."
+            validation_checks.append(
+                {
+                    "row": int(row_label),
+                    "old_itno": old_itno,
+                    "old_sern": old_sern,
+                    "new_itno": new_itno,
+                    "new_sern": new_sern,
+                    "allowed": False,
+                    "cono": cono_value,
+                    "message": validation_error,
+                }
             )
+            validation_errors.append(validation_error)
+            continue
+        if _norm_sern(new_sern) in existing_serns:
+            validation_error = f"Zeile {row_label}: neue SERN '{new_sern}' existiert bereits im System."
+            validation_checks.append(
+                {
+                    "row": int(row_label),
+                    "old_itno": old_itno,
+                    "old_sern": old_sern,
+                    "new_itno": new_itno,
+                    "new_sern": new_sern,
+                    "allowed": False,
+                    "cono": cono_value,
+                    "message": validation_error,
+                }
+            )
+            validation_errors.append(validation_error)
+            continue
         source_row = rows_by_key.get(old_key)
+        hitn_value = str((source_row or {}).get("C_MTRL") or "").strip()
+        if not hitn_value:
+            validation_error = (
+                f"Zeile {row_label}: HITN fehlt für {old_itno}/{old_sern}. "
+                "Einbauprüfung über MOS450MI nicht möglich."
+            )
+            validation_checks.append(
+                {
+                    "row": int(row_label),
+                    "old_itno": old_itno,
+                    "old_sern": old_sern,
+                    "hitn": hitn_value,
+                    "new_itno": new_itno,
+                    "new_sern": new_sern,
+                    "allowed": False,
+                    "cono": cono_value,
+                    "message": validation_error,
+                }
+            )
+            validation_errors.append(validation_error)
+            continue
+        # Cache pro MOTP + NEUER ITNO, damit bei großen Excel-Dateien nicht pro Zeile neu geprüft wird.
+        cache_key = f"{_norm_itno(hitn_value)}||{_norm_itno(new_itno)}"
+        if cache_key in mos450_cache:
+            allowed, check_message = mos450_cache[cache_key]
+        else:
+            params = _build_mos450_lstcomponent_params(hitn_value, env=env)
+            request_url = _build_m3_request_url(base_url, "MOS450MI", "LstComponent", params)
+            try:
+                response = call_m3_mi_get(base_url, token, "MOS450MI", "LstComponent", params)
+                mi_error = _mi_error_message(response)
+                if mi_error:
+                    allowed = False
+                    check_message = f"MOS450MI Fehler (MOTP): {mi_error}"
+                else:
+                    allowed, status_message = _mos450_component_status20(response, new_itno)
+                    check_message = (
+                        "OK: Komponente vorhanden mit Status 20."
+                        if allowed
+                        else f"Komponente {new_itno} in MOTP {hitn_value}: {status_message}"
+                    )
+                _append_api_log(
+                    "teilenummer_mos450_lstcomponent",
+                    params,
+                    response,
+                    allowed,
+                    "" if allowed else check_message,
+                    env=env_label,
+                    wagon={
+                        "itno": old_itno,
+                        "sern": old_sern,
+                        "new_itno": new_itno,
+                        "new_sern": new_sern,
+                    },
+                    dry_run=False,
+                    request_url=request_url,
+                    program="MOS450MI",
+                    transaction="LstComponent",
+                )
+            except Exception as exc:  # noqa: BLE001
+                allowed = False
+                check_message = f"MOS450MI Request fehlgeschlagen (MOTP): {exc}"
+            mos450_cache[cache_key] = (allowed, check_message)
+        # Excel-Validierung bleibt read-only:
+        # Wenn MOS450 nur "Komponente fehlt / Status !=20" meldet, lassen wir den Datensatz zu.
+        # Der echte Run holt das per MOS450 AddComponent + Recheck nach.
+        if not allowed and _is_mos450_soft_validation_failure(check_message):
+            allowed = True
+            check_message = (
+                f"WARN: {check_message} "
+                "(wird im Run via MOS450MI/AddComponent abgesichert)."
+            )
+
+        validation_checks.append(
+            {
+                "row": int(row_label),
+                "old_itno": old_itno,
+                "old_sern": old_sern,
+                "hitn": hitn_value,
+                "new_itno": new_itno,
+                "new_sern": new_sern,
+                "allowed": bool(allowed),
+                "cono": cono_value,
+                "message": check_message,
+            }
+        )
+        if not allowed:
+            validation_errors.append(f"Zeile {row_label}: {check_message}")
+            continue
         plan_times = _compute_teilenummer_plan_times(
             source_row or {},
             out_delay_min,
@@ -4857,6 +5094,17 @@ def teilenummer_validate_excel(
                 "PLAN_IN_DATE": plan_times["PLAN_IN_DATE"],
                 "PLAN_IN_TIME": plan_times["PLAN_IN_TIME"],
             }
+        )
+
+    if validation_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Excel ungültig: Einbauprüfung fehlgeschlagen.",
+                "errors": validation_errors,
+                "checks": validation_checks,
+                "env": env_label,
+            },
         )
 
     with _connect() as conn:
@@ -4892,9 +5140,15 @@ def teilenummer_validate_excel(
         "filename": filename,
         "count": len(validated),
         "mappings": validated,
+        "checks": validation_checks,
+        "validation": {
+            "checked": len(validation_checks),
+            "ok": len(validation_checks) - len(validation_errors),
+            "failed": len(validation_errors),
+        },
         "out_delay_min": out_delay_min if out_delay_min is not None else "",
         "in_delay_min": in_delay_min if in_delay_min is not None else "",
-        "env": _normalize_env(env),
+        "env": normalized_env,
     }
 
 
@@ -4959,6 +5213,12 @@ def teilenummer_prepare(payload: dict = Body(...), env: str = Query(DEFAULT_ENV)
                     status_code=400,
                     detail="Keine markierte Position entspricht dem Excel-Mapping.",
                 )
+
+        if not mapping_by_key and legacy_new_sern and len(rows) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Mit Neue SERN ist nur eine markierte Position erlaubt.",
+            )
 
         if mapping_by_key:
             candidate_itnos = {
@@ -5064,6 +5324,315 @@ def teilenummer_prepare(payload: dict = Body(...), env: str = Query(DEFAULT_ENV)
     }
 
 
+@app.post("/api/teilenummer/clear_tausch")
+def teilenummer_clear_tausch(env: str = Query(DEFAULT_ENV)) -> dict:
+    table_name = _table_for(TEILENUMMER_TAUSCH_TABLE, env)
+    with _connect() as conn:
+        if not _table_exists(conn, table_name):
+            return {"table": table_name, "cleared": 0, "env": _normalize_env(env)}
+        count_row = conn.execute(f'SELECT COUNT(1) AS CNT FROM "{table_name}"').fetchone()
+        cleared = int((count_row["CNT"] if count_row and "CNT" in count_row.keys() else 0) or 0)
+        conn.execute(f'DELETE FROM "{table_name}"')
+        conn.commit()
+    return {"table": table_name, "cleared": cleared, "env": _normalize_env(env)}
+
+
+@app.get("/api/teilenummer/api_log")
+def teilenummer_api_log(limit: int = Query(400, ge=1, le=5000)) -> dict:
+    entries: List[Dict[str, Any]] = []
+    if not API_LOG_PATH.exists():
+        return {"path": str(API_LOG_PATH), "count": 0, "entries": entries}
+    with API_LOG_PATH.open("r", encoding="utf-8") as handle:
+        lines = handle.readlines()
+    selected = lines[-limit:]
+    for line in selected:
+        raw = line.strip()
+        if not raw:
+            continue
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                entries.append(parsed)
+            else:
+                entries.append({"raw": raw})
+        except Exception:  # noqa: BLE001
+            entries.append({"raw": raw})
+    return {"path": str(API_LOG_PATH), "count": len(entries), "entries": entries}
+
+
+@app.post("/api/teilenummer/api_log/clear")
+def teilenummer_api_log_clear() -> dict:
+    _clear_api_log()
+    return {"path": str(API_LOG_PATH), "cleared": True}
+
+
+@app.get("/api/teilenummer/api_log.csv")
+def teilenummer_api_log_csv() -> Response:
+    import csv
+
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter=";")
+    writer.writerow(
+        [
+            "ts",
+            "env",
+            "action",
+            "program",
+            "transaction",
+            "ok",
+            "error",
+            "itno",
+            "sern",
+            "new_itno",
+            "new_sern",
+            "request_url",
+        ]
+    )
+    if API_LOG_PATH.exists():
+        with API_LOG_PATH.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    entry = json.loads(raw)
+                except Exception:  # noqa: BLE001
+                    continue
+                wagon = entry.get("wagon") if isinstance(entry, dict) else {}
+                request = entry.get("request") if isinstance(entry, dict) else {}
+                writer.writerow(
+                    [
+                        entry.get("ts", ""),
+                        entry.get("env", ""),
+                        entry.get("action", ""),
+                        entry.get("program", ""),
+                        entry.get("transaction", ""),
+                        entry.get("ok", ""),
+                        entry.get("error", ""),
+                        (wagon or {}).get("itno", ""),
+                        (wagon or {}).get("sern", ""),
+                        (wagon or {}).get("new_itno", ""),
+                        (wagon or {}).get("new_sern", ""),
+                        (request or {}).get("url", ""),
+                    ]
+                )
+    content = output.getvalue()
+    output.close()
+    filename = f"API_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"}
+    return Response(content=content, media_type="text/csv; charset=utf-8", headers=headers)
+
+
+@app.get("/api/teilenummer/api_log/view", response_class=HTMLResponse)
+def teilenummer_api_log_view() -> HTMLResponse:
+    html = """<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>API-Log</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 14px; background: #f3f5f8; color: #1f2937; }
+    .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+    button, a.btn { border: 1px solid #cbd5e1; background: #fff; border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 700; color: #1f2937; text-decoration: none; cursor: pointer; }
+    .log-wrap { margin: 0; border: 1px solid #dbe3ee; border-radius: 8px; background: #fff; padding: 10px; max-height: 78vh; overflow: auto; font-size: 11px; line-height: 1.35; }
+    .log-entry { border-bottom: 1px solid #eef2f7; padding: 6px 0; }
+    .log-entry:last-child { border-bottom: none; }
+    .log-entry.ok { color: #166534; }
+    .log-entry.warn { color: #a16207; }
+    .log-entry.nok { color: #b91c1c; }
+    .log-main { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .log-url { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin-top: 2px; opacity: 0.9; }
+    .empty { color: #64748b; }
+    .hint { font-size: 11px; color: #64748b; margin-left: auto; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <button id="refreshBtn" type="button">Aktualisieren</button>
+    <button id="clearBtn" type="button">Log löschen</button>
+    <a id="csvBtn" class="btn" href="/api/teilenummer/api_log.csv" target="_blank" rel="noopener">Als CSV exportieren</a>
+    <span class="hint" id="countInfo">Lade ...</span>
+  </div>
+  <div id="logContent" class="log-wrap"><div class="empty">Lade API-Log ...</div></div>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const env = params.get("env") || "tst";
+    const logContent = document.getElementById("logContent");
+    const countInfo = document.getElementById("countInfo");
+    const csvBtn = document.getElementById("csvBtn");
+    csvBtn.href = `/api/teilenummer/api_log.csv?env=${encodeURIComponent(env)}`;
+
+    const toBool = (value) => {
+      if (value === true || value === false) return value;
+      const text = String(value ?? "").trim().toLowerCase();
+      if (text === "true") return true;
+      if (text === "false") return false;
+      return null;
+    };
+
+    const classify = (entry) => {
+      if (!entry || typeof entry !== "object") return "";
+      const ok = toBool(entry.ok);
+      const action = String(entry.action || "").toLowerCase();
+      const error = String(entry.error || "").trim().toLowerCase();
+      const status = String(entry.status || "").trim().toLowerCase();
+
+      // Waiting/retry states should be highlighted in yellow.
+      const isWaitCase =
+        action.includes("cms100") &&
+        (error.includes("mwno fehlt") || error.includes("plpn fehlt") || status === "skipped");
+      if (isWaitCase) return "warn";
+
+      if (ok === true) return "ok";
+      if (ok === false) return "nok";
+      if (error) return "nok";
+      return "";
+    };
+
+    const format = (entry) => {
+      if (!entry || typeof entry !== "object") {
+        return { klass: "", main: String(entry || ""), url: "" };
+      }
+      const ts = entry.ts || "";
+      const action = entry.action || "";
+      const ok = entry.ok === true ? "OK" : (entry.ok === false ? "NOK" : "");
+      const error = entry.error || "";
+      const wagon = entry.wagon || {};
+      const itno = wagon.itno || "";
+      const sern = wagon.sern || "";
+      const url = (entry.request || {}).url || "";
+      return {
+        klass: classify(entry),
+        main: `${ts} | ${action} | ${ok} | ${itno}/${sern}${error ? ` | ${error}` : ""}`,
+        url: url,
+      };
+    };
+
+    const escapeHtml = (value) =>
+      String(value || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+
+    const renderEntries = (entries) => {
+      if (!Array.isArray(entries) || !entries.length) {
+        logContent.innerHTML = '<div class="empty">API-Log ist leer.</div>';
+        return;
+      }
+      const html = entries.map((entry) => {
+        const row = format(entry);
+        const urlHtml = row.url ? `<div class="log-url">${escapeHtml(row.url)}</div>` : "";
+        return `<div class="log-entry ${row.klass}"><div class="log-main">${escapeHtml(row.main)}</div>${urlHtml}</div>`;
+      }).join("");
+      logContent.innerHTML = html;
+    };
+
+    async function loadLog() {
+      logContent.innerHTML = '<div class="empty">Lade API-Log ...</div>';
+      const res = await fetch(`/api/teilenummer/api_log?env=${encodeURIComponent(env)}&limit=3000`);
+      if (!res.ok) {
+        const txt = await res.text();
+        logContent.innerHTML = `<div class="empty">${escapeHtml(txt || "API-Log konnte nicht geladen werden.")}</div>`;
+        countInfo.textContent = "Fehler";
+        return;
+      }
+      const data = await res.json();
+      const entries = Array.isArray(data.entries) ? data.entries : [];
+      countInfo.textContent = `${entries.length} Einträge`;
+      renderEntries(entries);
+    }
+
+    document.getElementById("refreshBtn").addEventListener("click", () => { void loadLog(); });
+    document.getElementById("clearBtn").addEventListener("click", async () => {
+      await fetch(`/api/teilenummer/api_log/clear?env=${encodeURIComponent(env)}`, { method: "POST" });
+      await loadLog();
+    });
+    void loadLog();
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
+@app.post("/api/teilenummer/export_xlsx")
+def teilenummer_export_xlsx(payload: dict = Body(...), env: str = Query(DEFAULT_ENV)) -> Response:
+    columns_raw = payload.get("columns")
+    rows_raw = payload.get("rows")
+    filename_raw = str(payload.get("filename") or "").strip()
+    if not isinstance(columns_raw, list) or not columns_raw:
+        raise HTTPException(status_code=400, detail="Spalten fehlen.")
+    if not isinstance(rows_raw, list):
+        raise HTTPException(status_code=400, detail="Zeilen fehlen.")
+
+    columns = [str(col or "").strip() for col in columns_raw if str(col or "").strip()]
+    if not columns:
+        raise HTTPException(status_code=400, detail="Spalten fehlen.")
+
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet(title="Wagenuebersicht")
+    default_font = Font(name="Arial", size=11)
+    header_font = Font(name="Arial", size=11, bold=True)
+    wagon_warning_font = Font(name="Arial", size=11, bold=True, color="9C0006")
+    part_warning_fill = PatternFill(fill_type="solid", fgColor="FDECEC")
+    widths = [len(str(col)) for col in columns]
+
+    header_cells: List[WriteOnlyCell] = []
+    for col in columns:
+        cell = WriteOnlyCell(ws, value=col)
+        cell.font = header_font
+        header_cells.append(cell)
+    ws.append(header_cells)
+
+    for row in rows_raw:
+        if not isinstance(row, dict):
+            continue
+        wagon_status = str(row.get("__W_STAT", "") or "").strip()
+        part_status = str(row.get("__A_STAT", "") or "").strip()
+        out_cells: List[WriteOnlyCell] = []
+        for idx, col in enumerate(columns):
+            value = row.get(col, "")
+            text_value = "" if value is None else str(value)
+            widths[idx] = max(widths[idx], len(text_value))
+            cell = WriteOnlyCell(ws, value=value)
+            cell.font = default_font
+            # ITNO/SERN: nur Hintergrund, wenn Teilstatus kritisch ist.
+            if col in {"ITNO", "SERN"} and part_status and part_status != "20":
+                cell.fill = part_warning_fill
+            # Spalte N/O (W_ITNO/W_SERN): fett + rote Schrift, wenn Wagenstatus kritisch ist.
+            if col in {"W_ITNO", "W_SERN"} and wagon_status and wagon_status != "20":
+                cell.font = wagon_warning_font
+            out_cells.append(cell)
+        ws.append(out_cells)
+
+    for idx, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = min(max(width + 2, 8), 60)
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    normalized_env = _normalize_env(env).upper()
+    safe_name = re.sub(
+        r"[^A-Za-z0-9._-]+",
+        "_",
+        filename_raw,
+    ) or f"Wagenuebersicht_{normalized_env}_{timestamp}.xlsx"
+    if not safe_name.lower().endswith(".xlsx"):
+        safe_name += ".xlsx"
+
+    headers = {
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(safe_name)}"
+    }
+    return Response(
+        content=output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
+
+
 @app.get("/api/teilenummer/mode")
 def teilenummer_mode(env: str = Query(DEFAULT_ENV)) -> dict:
     normalized = _normalize_env(env)
@@ -5095,7 +5664,7 @@ def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
             if not rows:
                 raise HTTPException(status_code=404, detail="Keine Daten in TEILENUMMER_TAUSCH.")
 
-            total_steps = len(rows) * 8
+            total_steps = len(rows) * 9
             _update_job(job["id"], total=total_steps, processed=0, results=[])
             _append_job_log(job["id"], f"Teilenummer-Ablauf startet: {len(rows)} Datensätze.")
 
@@ -5111,6 +5680,7 @@ def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
             mode_label = "DRYRUN" if dry_run else "LIVE"
             _append_job_log(job["id"], f"Betriebsmodus: {env_label} · {mode_label}")
             processed = 0
+            row_contexts: List[Dict[str, Any]] = []
             if dry_run:
                 _reset_dryrun_trace("teilenummer_run", env_label)
                 _append_job_log(job["id"], f"DryRun-Trace aktiviert: {DRYRUN_TRACE_PATH}")
@@ -5317,6 +5887,23 @@ def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
                         )
                     processed += 1
                     _update_job(job["id"], processed=processed)
+                    row_contexts.append(
+                        {
+                            "index": index,
+                            "row": row,
+                            "old_itno": old_itno,
+                            "old_sern": old_sern,
+                            "new_itno": new_itno,
+                            "new_sern": new_sern,
+                            "row_map": row_map,
+                            "wagon_ctx": wagon_ctx,
+                            "row_is_leading": row_is_leading,
+                            "row_hard_failed": row_hard_failed,
+                            "skip_after_error": skip_after_error,
+                            "plpn": plpn,
+                        }
+                    )
+                    continue
 
                     # CMS100MI Lst_PLPN_MWNO (mit Retry)
                     mwno = ""
@@ -5467,8 +6054,746 @@ def teilenummer_run(env: str = Query(DEFAULT_ENV)) -> dict:
                                         env=env,
                                     )
                                     ok = int(response.get("status_code") or 0) < 400
+                                    if ok:
+                                        status_label = "OK"
+                                        error_message = None
+                                    elif _ips_mos100_already_exists_fault(response):
+                                        ok = True
+                                        status_label = "OK_ALREADY_EXISTS"
+                                        error_message = None
+                                    else:
+                                        status_label = "NOK"
+                                        error_message = f"HTTP {response.get('status_code')}"
+                                except Exception as exc:  # noqa: BLE001
+                                    ok = False
+                                    status_label = "NOK"
+                                    error_message = str(exc)
+                                    response = {"error": error_message}
+                            _append_api_log(
+                                "teilenummer_ips_mos100_chgsern",
+                                params,
+                                response,
+                                ok,
+                                error_message,
+                                env=env_label,
+                                wagon=wagon_ctx,
+                                dry_run=dry_run,
+                                request_url=request_url,
+                                program="MOS100",
+                                transaction="Chg_SERN",
+                                request_method="POST",
+                                status=status_label,
+                            )
+                            if ok or dry_run:
+                                break
+                            if MOS100_RETRY_MAX and attempt >= MOS100_RETRY_MAX:
+                                break
+                            if MOS100_RETRY_DELAY_SEC:
+                                time.sleep(MOS100_RETRY_DELAY_SEC)
+                            attempt += 1
+                        if not ok and not dry_run:
+                            row_hard_failed = True
+                    _update_teilenummer_row(
+                        conn,
+                        table_name,
+                        row["seq"],
+                        {"MOS100_STATUS": status_label},
+                    )
+                    processed += 1
+                    _update_job(job["id"], processed=processed)
+
+                    # MOS180MI Approve (mit Retry)
+                    mos180_row = dict(row_map)
+                    mos180_row["MWNO"] = mwno
+                    if row_hard_failed:
+                        mos180_status = skip_after_error
+                        _append_api_log(
+                            "teilenummer_mos180_approve",
+                            {},
+                            {"skipped": skip_after_error},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
+                            program="MOS180MI",
+                            transaction="Approve",
+                            status="SKIPPED",
+                        )
+                        _update_teilenummer_row(
+                            conn,
+                            table_name,
+                            row["seq"],
+                            {"MOS180_STATUS": mos180_status},
+                        )
+                        processed += 1
+                        _update_job(job["id"], processed=processed)
+                    else:
+                        attempt = 1
+                        while True:
+                            params = _build_mos180_params(mos180_row, env=env)
+                            request_url = _build_m3_request_url(base_url, "MOS180MI", "Approve", params)
+                            if not mwno:
+                                ok = False
+                                status_label = "ERROR"
+                                error_message = "MWNO fehlt"
+                                response = {"error": error_message}
+                            elif dry_run:
+                                ok = True
+                                status_label = "DRYRUN"
+                                error_message = None
+                                response = {"dry_run": True}
+                            else:
+                                try:
+                                    response = call_m3_mi_get(base_url, token, "MOS180MI", "Approve", params)
+                                    ok, status_label, error_message = _mi_status(response)
+                                except Exception as exc:  # noqa: BLE001
+                                    ok = False
+                                    status_label = "ERROR"
+                                    error_message = str(exc)
+                                    response = {"error": error_message}
+                            mos180_status = status_label if ok else f"{status_label}: {error_message}"
+                            _append_api_log(
+                                "teilenummer_mos180_approve",
+                                params,
+                                response,
+                                ok,
+                                error_message,
+                                env=env_label,
+                                wagon=wagon_ctx,
+                                dry_run=dry_run,
+                                request_url=request_url,
+                                program="MOS180MI",
+                                transaction="Approve",
+                            )
+                            _update_teilenummer_row(
+                                conn,
+                                table_name,
+                                row["seq"],
+                                {"MOS180_STATUS": mos180_status},
+                            )
+                            processed += 1
+                            _update_job(job["id"], processed=processed)
+                            if ok or dry_run or not mwno:
+                                break
+                            if MOS180_RETRY_MAX and attempt >= MOS180_RETRY_MAX:
+                                break
+                            total_steps += 1
+                            _update_job(job["id"], total=total_steps)
+                            _append_job_log(
+                                job["id"],
+                                f"MOS180MI Approve: Warte {MOS180_RETRY_DELAY_SEC} Sekunden auf ERP ...",
+                            )
+                            if MOS180_RETRY_DELAY_SEC:
+                                time.sleep(MOS180_RETRY_DELAY_SEC)
+                            attempt += 1
+                        if not ok and not dry_run:
+                            row_hard_failed = True
+
+                    # IPS MOS050 Montage (mit Retry)
+                    mos050_row = dict(row_map)
+                    mos050_row["MWNO"] = mwno
+                    if row_is_leading:
+                        mos050_status = "SKIPPED: führendes Objekt (kein Montage-Schritt)"
+                        _append_api_log(
+                            "teilenummer_ips_mos50_montage",
+                            {},
+                            {"skipped": mos050_status},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
+                            program=MOS050_SERVICE or "MOS050",
+                            transaction=MOS050_OPERATION or "Montage",
+                            request_method="POST",
+                            status="SKIPPED",
+                        )
+                        _update_teilenummer_row(
+                            conn,
+                            table_name,
+                            row["seq"],
+                            {"MOS050_STATUS": mos050_status},
+                        )
+                        processed += 1
+                        _update_job(job["id"], processed=processed)
+                    elif row_hard_failed:
+                        mos050_status = skip_after_error
+                        _append_api_log(
+                            "teilenummer_ips_mos50_montage",
+                            {},
+                            {"skipped": skip_after_error},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
+                            program=MOS050_SERVICE or "MOS050",
+                            transaction=MOS050_OPERATION or "Montage",
+                            request_method="POST",
+                            status="SKIPPED",
+                        )
+                        _update_teilenummer_row(
+                            conn,
+                            table_name,
+                            row["seq"],
+                            {"MOS050_STATUS": mos050_status},
+                        )
+                        processed += 1
+                        _update_job(job["id"], processed=processed)
+                    else:
+                        attempt = 1
+                        while True:
+                            params = _build_mos050_params(mos050_row)
+                            request_url = _build_ips_request_url(base_url, MOS050_SERVICE)
+                            if not mwno:
+                                ok = False
+                                status_label = "NOK"
+                                error_message = "MWNO fehlt"
+                                response = {"error": error_message}
+                            elif dry_run:
+                                ok = True
+                                status_label = "DRYRUN"
+                                error_message = None
+                                response = {"dry_run": True}
+                            else:
+                                try:
+                                    response = _call_ips_service(
+                                        base_url,
+                                        token,
+                                        MOS050_SERVICE,
+                                        MOS050_OPERATION,
+                                        params,
+                                        namespace_override=MOS050_NAMESPACE or None,
+                                        body_tag_override=MOS050_BODY_TAG or None,
+                                        env=env,
+                                    )
+                                    ok = int(response.get("status_code") or 0) < 400
                                     status_label = "OK" if ok else "NOK"
                                     error_message = None if ok else f"HTTP {response.get('status_code')}"
+                                except Exception as exc:  # noqa: BLE001
+                                    ok = False
+                                    status_label = "NOK"
+                                    error_message = str(exc)
+                                    response = {"error": error_message}
+                            _append_api_log(
+                                "teilenummer_ips_mos50_montage",
+                                params,
+                                response,
+                                ok,
+                                error_message,
+                                env=env_label,
+                                wagon=wagon_ctx,
+                                dry_run=dry_run,
+                                request_url=request_url,
+                                program=MOS050_SERVICE or "MOS050",
+                                transaction=MOS050_OPERATION or "Montage",
+                                request_method="POST",
+                                status=status_label,
+                            )
+                            _update_teilenummer_row(
+                                conn,
+                                table_name,
+                                row["seq"],
+                                {"MOS050_STATUS": status_label},
+                            )
+                            processed += 1
+                            _update_job(job["id"], processed=processed)
+                            if ok or dry_run or not mwno:
+                                break
+                            if MOS050_RETRY_MAX and attempt >= MOS050_RETRY_MAX:
+                                break
+                            total_steps += 1
+                            _update_job(job["id"], total=total_steps)
+                            _append_job_log(
+                                job["id"],
+                                f"IPS MOS050: Warte {MOS050_RETRY_DELAY_SEC} Sekunden auf ERP ...",
+                            )
+                            if MOS050_RETRY_DELAY_SEC:
+                                time.sleep(MOS050_RETRY_DELAY_SEC)
+                            attempt += 1
+                        if not ok and not dry_run:
+                            row_hard_failed = True
+
+                    # MOS125MI Einbau
+                    if row_is_leading:
+                        in_status = "SKIPPED: führendes Objekt (kein Einbau)"
+                        _append_api_log(
+                            "teilenummer_einbau",
+                            {},
+                            {"skipped": in_status},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
+                            program="MOS125MI",
+                            transaction="RemoveInstall",
+                            status="SKIPPED",
+                        )
+                    elif row_hard_failed:
+                        in_status = skip_after_error
+                        _append_api_log(
+                            "teilenummer_einbau",
+                            {},
+                            {"skipped": skip_after_error},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
+                            program="MOS125MI",
+                            transaction="RemoveInstall",
+                            status="SKIPPED",
+                        )
+                    else:
+                        params = _build_mos125_params(row_map, mode="in", env=env)
+                        request_url = _build_m3_request_url(base_url, "MOS125MI", "RemoveInstall", params)
+                        if not params.get("TRDT"):
+                            ok = False
+                            status_label = "ERROR"
+                            error_message = "UMBAU_DATUM fehlt"
+                            response = {"error": error_message}
+                        elif dry_run:
+                            ok = True
+                            status_label = "DRYRUN"
+                            error_message = None
+                            response = {"dry_run": True}
+                        else:
+                            try:
+                                response = call_m3_mi_get(base_url, token, "MOS125MI", "RemoveInstall", params)
+                                ok, status_label, error_message = _mi_status(response)
+                            except Exception as exc:  # noqa: BLE001
+                                ok = False
+                                status_label = "ERROR"
+                                error_message = str(exc)
+                                response = {"error": error_message}
+                        in_status = status_label if ok else f"{status_label}: {error_message}"
+                        _append_api_log(
+                            "teilenummer_einbau",
+                            params,
+                            response,
+                            ok,
+                            error_message,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url=request_url,
+                            program="MOS125MI",
+                            transaction="RemoveInstall",
+                        )
+                    _update_teilenummer_row(conn, table_name, row["seq"], {"IN_STATUS": in_status})
+                    processed += 1
+                    _update_job(job["id"], processed=processed)
+
+                    row_result = "OK"
+                    if row_hard_failed:
+                        row_result = "FEHLER"
+                    elif row_is_leading:
+                        row_result = "OK_FUEHRENDES_OBJEKT"
+                    _append_job_log(
+                        job["id"],
+                        f"{index}/{len(rows)} abgeschlossen [{row_result}]: {old_itno} {old_sern} -> {new_itno} {new_sern}",
+                    )
+
+            if row_contexts and not dry_run:
+                _append_job_log(
+                    job["id"],
+                    f"Phase 1 abgeschlossen ({len(row_contexts)} Datensätze). "
+                    f"Warte {TEILENUMMER_PHASE_SPLIT_WAIT_SEC} Sekunden vor CMS100 ...",
+                )
+                time.sleep(TEILENUMMER_PHASE_SPLIT_WAIT_SEC)
+
+            mos450_runtime_cache: Dict[str, tuple[bool, str, Dict[str, str], str, Any]] = {}
+            with _connect() as conn:
+                for ctx in row_contexts:
+                    index = int(ctx["index"])
+                    row = ctx["row"]
+                    old_itno = str(ctx["old_itno"] or "")
+                    old_sern = str(ctx["old_sern"] or "")
+                    new_itno = str(ctx["new_itno"] or "")
+                    new_sern = str(ctx["new_sern"] or "")
+                    row_map = dict(ctx["row_map"])
+                    wagon_ctx = dict(ctx["wagon_ctx"])
+                    row_is_leading = bool(ctx["row_is_leading"])
+                    row_hard_failed = bool(ctx["row_hard_failed"])
+                    skip_after_error = str(ctx["skip_after_error"] or "SKIPPED: vorheriger Schritt fehlgeschlagen")
+                    plpn = str(ctx["plpn"] or "")
+
+                    # MOS450MI Precheck (verhindert MO90804 beim Einbau)
+                    if row_is_leading:
+                        _append_api_log(
+                            "teilenummer_mos450_runtime_precheck",
+                            {},
+                            {"skipped": "SKIPPED: führendes Objekt (kein Komponenten-Precheck)"},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
+                            program="MOS450MI",
+                            transaction="LstComponent",
+                            status="SKIPPED",
+                        )
+                    elif row_hard_failed:
+                        _append_api_log(
+                            "teilenummer_mos450_runtime_precheck",
+                            {},
+                            {"skipped": skip_after_error},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
+                            program="MOS450MI",
+                            transaction="LstComponent",
+                            status="SKIPPED",
+                        )
+                    elif dry_run:
+                        params = _build_mos450_lstcomponent_params(_row_value(row_map, "MTRL"), env=env)
+                        request_url = _build_m3_request_url(base_url, "MOS450MI", "LstComponent", params)
+                        _append_api_log(
+                            "teilenummer_mos450_runtime_precheck",
+                            params,
+                            {"dry_run": True},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url=request_url,
+                            program="MOS450MI",
+                            transaction="LstComponent",
+                            status="DRYRUN",
+                        )
+                    else:
+                        hitn_value = _row_value(row_map, "MTRL")
+                        cfgl_value = _row_value(row_map, "CFGL")
+                        hitn_key = str(hitn_value or "").strip().upper()
+                        new_itno_key = str(new_itno or "").strip().upper()
+                        cache_key = f"{hitn_key}||{new_itno_key}"
+                        if cache_key in mos450_runtime_cache:
+                            allowed, check_message, params, request_url, cached_response = mos450_runtime_cache[cache_key]
+                            response = {"cached": True, "response": cached_response}
+                        else:
+                            params = _build_mos450_lstcomponent_params(hitn_value, env=env)
+                            request_url = _build_m3_request_url(base_url, "MOS450MI", "LstComponent", params)
+                            if not hitn_key:
+                                allowed = False
+                                check_message = "MOTP/HITN fehlt."
+                                response = {"error": check_message}
+                            elif not new_itno_key:
+                                allowed = False
+                                check_message = "Neue ITNO fehlt."
+                                response = {"error": check_message}
+                            else:
+                                try:
+                                    response = call_m3_mi_get(base_url, token, "MOS450MI", "LstComponent", params)
+                                    mi_error = _mi_error_message(response)
+                                    if mi_error:
+                                        allowed = False
+                                        check_message = f"MOS450MI Fehler (MOTP): {mi_error}"
+                                    else:
+                                        allowed, status_message = _mos450_component_status20(response, new_itno)
+                                        check_message = (
+                                            "OK: Komponente vorhanden mit Status 20."
+                                            if allowed
+                                            else f"Komponente {new_itno} in MOTP {hitn_value}: {status_message}"
+                                        )
+                                except Exception as exc:  # noqa: BLE001
+                                    allowed = False
+                                    check_message = f"MOS450MI Request fehlgeschlagen (MOTP): {exc}"
+                                    response = {"error": check_message}
+
+                            # Fallback: Wenn Komponente laut LstComponent fehlt/nicht Status 20,
+                            # dann AddComponent versuchen und danach erneut validieren.
+                            if not allowed and hitn_key and new_itno_key:
+                                add_params = _build_mos450_addcomponent_params(
+                                    hitn_value,
+                                    new_itno,
+                                    cfgl_value,
+                                    env=env,
+                                )
+                                add_request_url = _build_m3_request_url(
+                                    base_url,
+                                    "MOS450MI",
+                                    "AddComponent",
+                                    add_params,
+                                )
+                                if not add_params.get("CFGL"):
+                                    add_ok = False
+                                    add_status = "ERROR"
+                                    add_error = "CFGL fehlt für MOS450MI/AddComponent."
+                                    add_response: Any = {"error": add_error}
+                                else:
+                                    try:
+                                        add_response = call_m3_mi_get(
+                                            base_url,
+                                            token,
+                                            "MOS450MI",
+                                            "AddComponent",
+                                            add_params,
+                                        )
+                                        add_ok, add_status, add_error = _mi_status(add_response)
+                                    except Exception as exc:  # noqa: BLE001
+                                        add_ok = False
+                                        add_status = "ERROR"
+                                        add_error = str(exc)
+                                        add_response = {"error": add_error}
+                                _append_api_log(
+                                    "teilenummer_mos450_addcomponent",
+                                    add_params,
+                                    add_response,
+                                    add_ok,
+                                    add_error,
+                                    env=env_label,
+                                    wagon=wagon_ctx,
+                                    dry_run=dry_run,
+                                    request_url=add_request_url,
+                                    program="MOS450MI",
+                                    transaction="AddComponent",
+                                    status=add_status if add_status else ("OK" if add_ok else "NOK"),
+                                )
+                                if add_ok:
+                                    # Direkt nach AddComponent nochmals LstComponent prüfen.
+                                    try:
+                                        verify_response = call_m3_mi_get(
+                                            base_url,
+                                            token,
+                                            "MOS450MI",
+                                            "LstComponent",
+                                            params,
+                                        )
+                                        verify_error = _mi_error_message(verify_response)
+                                        if verify_error:
+                                            allowed = False
+                                            check_message = f"MOS450MI Fehler nach AddComponent (MOTP): {verify_error}"
+                                        else:
+                                            allowed, status_message = _mos450_component_status20(
+                                                verify_response,
+                                                new_itno,
+                                            )
+                                            check_message = (
+                                                "OK: Komponente nach AddComponent vorhanden mit Status 20."
+                                                if allowed
+                                                else f"Komponente {new_itno} in MOTP {hitn_value} nach AddComponent: {status_message}"
+                                            )
+                                        response = {
+                                            "initial_precheck": response,
+                                            "addcomponent": add_response,
+                                            "postcheck": verify_response,
+                                        }
+                                    except Exception as exc:  # noqa: BLE001
+                                        allowed = False
+                                        check_message = f"MOS450MI LstComponent nach AddComponent fehlgeschlagen: {exc}"
+                                        response = {
+                                            "initial_precheck": response,
+                                            "addcomponent": add_response,
+                                            "postcheck_error": str(exc),
+                                        }
+                                else:
+                                    check_message = f"{check_message} | AddComponent fehlgeschlagen: {add_error}"
+                                    response = {
+                                        "initial_precheck": response,
+                                        "addcomponent": add_response,
+                                    }
+                                _append_job_log(
+                                    job["id"],
+                                    f"{index}/{len(rows)} MOS450 AddComponent "
+                                    f"{'OK' if add_ok else 'NOK'}: {hitn_value} / {new_itno} / {cfgl_value or '-'}",
+                                )
+                            mos450_runtime_cache[cache_key] = (allowed, check_message, params, request_url, response)
+                        _append_api_log(
+                            "teilenummer_mos450_runtime_precheck",
+                            params,
+                            response,
+                            bool(allowed),
+                            "" if allowed else check_message,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url=request_url,
+                            program="MOS450MI",
+                            transaction="LstComponent",
+                            status="OK" if allowed else "NOK",
+                        )
+                        if not allowed:
+                            row_hard_failed = True
+                            skip_after_error = f"SKIPPED: MOS450-Komponentenprüfung fehlgeschlagen ({check_message})"
+                            _append_job_log(
+                                job["id"],
+                                f"{index}/{len(rows)} MOS450-Precheck NOK: "
+                                f"{old_itno}/{old_sern} -> {new_itno}/{new_sern} | {check_message}",
+                            )
+                    processed += 1
+                    _update_job(job["id"], processed=processed)
+
+                    # CMS100MI Lst_PLPN_MWNO (mit Retry, max. 10 Versuche, 3s)
+                    mwno = ""
+                    if row_hard_failed:
+                        cms_status = skip_after_error
+                        _append_api_log(
+                            "teilenummer_cms100_lst_plpn_mwno",
+                            {},
+                            {"qomwno": "", "skipped": skip_after_error},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url="",
+                            program="CMS100MI",
+                            transaction="Lst_PLPN_MWNO",
+                            status="SKIPPED",
+                        )
+                        _update_teilenummer_row(
+                            conn,
+                            table_name,
+                            row["seq"],
+                            {"CMS100_STATUS": cms_status, "MWNO": mwno},
+                        )
+                        processed += 1
+                        _update_job(job["id"], processed=processed)
+                    else:
+                        cms_status = ""
+                        attempt = 1
+                        while True:
+                            params = _build_cms100_params(plpn, env=env)
+                            request_url = _build_m3_request_url(base_url, "CMS100MI", "Lst_PLPN_MWNO", params)
+                            if not plpn:
+                                ok = False
+                                status_label = "ERROR"
+                                error_message = "PLPN fehlt"
+                                response = {"error": error_message}
+                                mwno = ""
+                            elif dry_run:
+                                ok = True
+                                status_label = "DRYRUN"
+                                error_message = None
+                                response = {"dry_run": True}
+                                mwno = "DRYRUN"
+                            else:
+                                try:
+                                    response = call_m3_mi_get(base_url, token, "CMS100MI", "Lst_PLPN_MWNO", params)
+                                    ok, status_label, error_message = _mi_status(response)
+                                    mwno = _extract_mwno(response) if ok else ""
+                                except Exception as exc:  # noqa: BLE001
+                                    ok = False
+                                    status_label = "ERROR"
+                                    error_message = str(exc)
+                                    response = {"error": error_message}
+                                    mwno = ""
+                            if ok and not mwno:
+                                ok = False
+                                status_label = "ERROR"
+                                error_message = "MWNO fehlt"
+                            cms_status = status_label if ok else f"{status_label}: {error_message}"
+                            _append_api_log(
+                                "teilenummer_cms100_lst_plpn_mwno",
+                                params,
+                                {"qomwno": mwno, "response": response},
+                                ok,
+                                error_message,
+                                env=env_label,
+                                wagon=wagon_ctx,
+                                dry_run=dry_run,
+                                request_url=request_url,
+                                program="CMS100MI",
+                                transaction="Lst_PLPN_MWNO",
+                            )
+                            _update_teilenummer_row(
+                                conn,
+                                table_name,
+                                row["seq"],
+                                {"CMS100_STATUS": cms_status, "MWNO": mwno},
+                            )
+                            processed += 1
+                            _update_job(job["id"], processed=processed)
+                            if mwno or dry_run or not plpn:
+                                break
+                            if attempt >= TEILENUMMER_CMS100_RETRY_MAX:
+                                break
+                            total_steps += 1
+                            _update_job(job["id"], total=total_steps)
+                            _append_job_log(
+                                job["id"],
+                                f"CMS100MI: Warte {TEILENUMMER_CMS100_RETRY_DELAY_SEC:g} Sekunden auf ERP ...",
+                            )
+                            time.sleep(TEILENUMMER_CMS100_RETRY_DELAY_SEC)
+                            attempt += 1
+                        if not mwno and not dry_run:
+                            row_hard_failed = True
+
+                    # IPS MOS100 Chg_SERN (ITNO + SERN)
+                    params = {
+                        "WorkOrderNumber": mwno,
+                        "Product": old_itno,
+                        "NewItemNumber": new_itno,
+                        "NewLotNumber": new_sern,
+                    }
+                    request_url = _build_ips_request_url(base_url, "MOS100")
+                    if row_hard_failed:
+                        status_label = "SKIPPED"
+                        _append_api_log(
+                            "teilenummer_ips_mos100_chgsern",
+                            params,
+                            {"skipped": skip_after_error},
+                            True,
+                            None,
+                            env=env_label,
+                            wagon=wagon_ctx,
+                            dry_run=dry_run,
+                            request_url=request_url,
+                            program="MOS100",
+                            transaction="Chg_SERN",
+                            request_method="POST",
+                            status=status_label,
+                        )
+                    else:
+                        attempt = 1
+                        ok = False
+                        error_message = None
+                        response = {}
+                        status_label = "NOK"
+                        while True:
+                            if not mwno:
+                                ok = False
+                                status_label = "NOK"
+                                error_message = "MWNO fehlt"
+                                response = {"error": error_message}
+                            elif dry_run:
+                                ok = True
+                                status_label = "DRYRUN"
+                                error_message = None
+                                response = {"dry_run": True}
+                            else:
+                                try:
+                                    response = _call_ips_service(
+                                        base_url,
+                                        token,
+                                        "MOS100",
+                                        "Chg_SERN",
+                                        params,
+                                        env=env,
+                                    )
+                                    ok = int(response.get("status_code") or 0) < 400
+                                    if ok:
+                                        status_label = "OK"
+                                        error_message = None
+                                    elif _ips_mos100_already_exists_fault(response):
+                                        ok = True
+                                        status_label = "OK_ALREADY_EXISTS"
+                                        error_message = None
+                                    else:
+                                        status_label = "NOK"
+                                        error_message = f"HTTP {response.get('status_code')}"
                                 except Exception as exc:  # noqa: BLE001
                                     ok = False
                                     status_label = "NOK"
@@ -7234,8 +8559,16 @@ def renumber_mos100(env: str = Query(DEFAULT_ENV)) -> dict:
                                     env=env,
                                 )
                                 ok = int(response.get("status_code") or 0) < 400
-                                error_message = None if ok else f"HTTP {response.get('status_code')}"
-                                status_label = "OK" if ok else "NOK"
+                                if ok:
+                                    error_message = None
+                                    status_label = "OK"
+                                elif _ips_mos100_already_exists_fault(response):
+                                    ok = True
+                                    error_message = None
+                                    status_label = "OK_ALREADY_EXISTS"
+                                else:
+                                    error_message = f"HTTP {response.get('status_code')}"
+                                    status_label = "NOK"
                             except Exception as exc:  # noqa: BLE001
                                 response = {"error": str(exc)}
                                 error_message = str(exc)

@@ -38,4 +38,4 @@ left outer join MILOIN w
   and w.SERN = d.HISN
 where a.STAT < 99
   and a.EQTP <> '100'
-  and a.CONO = '881'
+  and a.CONO = '860'
