@@ -537,10 +537,26 @@ def _init_goldenview_db(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {GOLDENVIEW_QUERIES_TABLE} ADD COLUMN {column} TEXT")
 
 
-def _connect() -> sqlite3.Connection:
+def _connect(timeout: float = 30.0, busy_timeout_ms: int = 30000) -> sqlite3.Connection:
     if not DB_PATH.exists():
         raise HTTPException(status_code=500, detail=f"SQLite DB nicht gefunden: {DB_PATH}")
-    return create_sqlite_connection(DB_PATH)
+    db_path = Path(DB_PATH)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    last_error: sqlite3.OperationalError | None = None
+    for attempt in range(6):
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=timeout)
+            conn.row_factory = sqlite3.Row
+            conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
+            return conn
+        except sqlite3.OperationalError as exc:
+            last_error = exc
+            if not _is_sqlite_locked_error(exc) or attempt == 5:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+    raise sqlite3.OperationalError(f"SQLite Verbindung fehlgeschlagen: {db_path}")
 
 
 def _ensure_swap_table(conn: sqlite3.Connection, table_name: str) -> None:
@@ -1167,8 +1183,7 @@ def _cache_status_for(base_table: str, env: str) -> dict:
 
     for attempt in range(6):
         try:
-            with _connect() as conn:
-                conn.execute("PRAGMA busy_timeout = 2000")
+            with _connect(timeout=2.0, busy_timeout_ms=2000) as conn:
                 _ensure_cache_status_table(conn)
                 row = conn.execute(
                     f"SELECT base_table, env, env_table, row_count, loaded_at, source FROM {CACHE_STATUS_TABLE} WHERE base_table = ? AND env = ?",
@@ -2773,8 +2788,7 @@ def wagons_count(
     for _ in range(5):
         try:
             table_name = _ensure_wagon_data(table, env)
-            with _connect() as conn:
-                conn.execute("PRAGMA busy_timeout = 2000")
+            with _connect(timeout=2.0, busy_timeout_ms=2000) as conn:
                 total = conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0]
             return {"table": table_name, "total": total, "env": normalized}
         except sqlite3.OperationalError as exc:
@@ -2799,8 +2813,7 @@ def wagons_chunk(
     for _ in range(5):
         try:
             table_name = _ensure_wagon_data(table, env)
-            with _connect() as conn:
-                conn.execute("PRAGMA busy_timeout = 2000")
+            with _connect(timeout=2.0, busy_timeout_ms=2000) as conn:
                 if table_name == _table_for(TEILENUMMER_TABLE, env):
                     cursor = conn.execute(
                         f'SELECT rowid AS "ROWID", * FROM "{table_name}" LIMIT ? OFFSET ?',
