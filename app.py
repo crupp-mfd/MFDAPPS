@@ -1225,8 +1225,17 @@ class AppHandler(SimpleHTTPRequestHandler):
             "upgrade",
         }
 
+        timeout_seconds = 120
+        if method.upper() == "POST" and (
+            path.endswith("/reload")
+            or path.startswith("/api/datalake/")
+            or path.startswith("/api/teilenummer/")
+            or path.startswith("/api/wagensuche/")
+        ):
+            timeout_seconds = 1800
+
         try:
-            with urlopen(req, timeout=120) as upstream:
+            with urlopen(req, timeout=timeout_seconds) as upstream:
                 status = upstream.getcode()
                 response_body = upstream.read()
                 headers = upstream.getheaders()
