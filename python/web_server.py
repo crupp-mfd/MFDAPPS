@@ -1168,6 +1168,7 @@ def _cache_status_for(base_table: str, env: str) -> dict:
     for attempt in range(6):
         try:
             with _connect() as conn:
+                conn.execute("PRAGMA busy_timeout = 2000")
                 _ensure_cache_status_table(conn)
                 row = conn.execute(
                     f"SELECT base_table, env, env_table, row_count, loaded_at, source FROM {CACHE_STATUS_TABLE} WHERE base_table = ? AND env = ?",
@@ -2773,6 +2774,7 @@ def wagons_count(
         try:
             table_name = _ensure_wagon_data(table, env)
             with _connect() as conn:
+                conn.execute("PRAGMA busy_timeout = 2000")
                 total = conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0]
             return {"table": table_name, "total": total, "env": normalized}
         except sqlite3.OperationalError as exc:
@@ -2798,6 +2800,7 @@ def wagons_chunk(
         try:
             table_name = _ensure_wagon_data(table, env)
             with _connect() as conn:
+                conn.execute("PRAGMA busy_timeout = 2000")
                 if table_name == _table_for(TEILENUMMER_TABLE, env):
                     cursor = conn.execute(
                         f'SELECT rowid AS "ROWID", * FROM "{table_name}" LIMIT ? OFFSET ?',
