@@ -167,11 +167,23 @@ def _ensure_rsrd_backend() -> None:
     if not python_bin:
         python_bin = str(preferred_python if preferred_python.exists() else Path(sys.executable))
 
+    runtime_root_env = os.environ.get("MFDAPPS_RUNTIME_ROOT", "").strip()
+    if runtime_root_env:
+        runtime_root = Path(runtime_root_env).expanduser()
+    else:
+        runtime_root = Path("/runtime")
+        if not runtime_root.exists():
+            runtime_root = REPO_ROOT / "apps" / "christian" / "data"
+    runtime_root = runtime_root.resolve()
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    sqlite_path = runtime_root / "cache.db"
+    sqlite_path.touch(exist_ok=True)
+
     env = os.environ.copy()
     env["MFDAPPS_ENFORCE_ONEDRIVE"] = "0"
     env["MFDAPPS_HOME"] = str(REPO_ROOT)
-    env["MFDAPPS_RUNTIME_ROOT"] = str(REPO_ROOT / "apps" / "christian" / "data")
-    env["SQLITE_PATH"] = str(REPO_ROOT / "apps" / "christian" / "data" / "cache.db")
+    env["MFDAPPS_RUNTIME_ROOT"] = str(runtime_root)
+    env["SQLITE_PATH"] = str(sqlite_path)
     env["MFDAPPS_CREDENTIALS_DIR"] = str(REPO_ROOT / "credentials")
     env["MFDAPPS_FRONTEND_DIR"] = str(REPO_ROOT / "apps" / "christian" / "AppRSRD" / "frontend")
     env["PYTHONPATH"] = (
