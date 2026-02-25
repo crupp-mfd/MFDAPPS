@@ -2449,6 +2449,11 @@ def _build_sts046_params(whlo: str, geit: str, itno: str, bano: str) -> Dict[str
 def _ensure_wagon_data(table: str, env: str) -> str:
     env_table = _table_for(table, env)
     teilenummer_sql = _teilenummer_sql_file(env) if table == TEILENUMMER_TABLE else None
+    if table == TEILENUMMER_TABLE and (teilenummer_sql and teilenummer_sql.exists()):
+        sql_file = teilenummer_sql
+    else:
+        sql_file = _wagons_sql_file(env)
+
     with _connect() as conn:
         if _table_exists(conn, env_table):
             if table == TEILENUMMER_TABLE:
@@ -2457,17 +2462,17 @@ def _ensure_wagon_data(table: str, env: str) -> str:
                 conn.commit()
             return env_table
 
-    if table == TEILENUMMER_TABLE and (teilenummer_sql and teilenummer_sql.exists()):
-        sql_file = teilenummer_sql
-    else:
-        sql_file = _wagons_sql_file(env)
-    result = _run_compass_to_sqlite(sql_file, env_table, env)
-    if result.returncode != 0:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Reload fehlgeschlagen: {result.stderr or result.stdout}",
-        )
-    _record_cache_status(table, env, "auto_load")
+        # Kein Auto-Reload mehr beim Öffnen der Seite:
+        # Fehlt die Tabelle, wird nur ein leeres Schema angelegt.
+        columns = _columns_from_sql_file(sql_file)
+        if not columns:
+            columns = ["INIT_PLACEHOLDER"]
+        _create_table_from_columns(conn, env_table, columns)
+        if table == TEILENUMMER_TABLE:
+            _ensure_columns(conn, env_table, columns + ["CHECKED"])
+        conn.commit()
+
+    _record_cache_status(table, env, "empty_init")
     return env_table
 
 
