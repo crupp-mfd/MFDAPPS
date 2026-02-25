@@ -365,6 +365,12 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logging.getLogger("web-server").exception("Unhandled exception on %s", request.url.path)
+    return JSONResponse(status_code=500, content={"detail": f"Unhandled backend error: {exc}"})
+
+
 def _try_include_excel_import_router() -> None:
     excel_src = PROJECT_ROOT / "apps" / "christian" / "AppExcelImport" / "src"
     if not excel_src.exists():
