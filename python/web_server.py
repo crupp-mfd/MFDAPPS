@@ -1102,6 +1102,16 @@ def _table_row_count(conn: sqlite3.Connection, table: str) -> int:
     return int(conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
 
 
+def _is_sqlite_locked_error(exc: sqlite3.OperationalError) -> bool:
+    msg = str(exc or "").lower()
+    return "database is locked" in msg or "database schema is locked" in msg
+
+
+def _is_sqlite_missing_table_error(exc: sqlite3.OperationalError) -> bool:
+    msg = str(exc or "").lower()
+    return "no such table" in msg
+
+
 def _ensure_cache_status_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         f"""
@@ -2460,25 +2470,34 @@ def _ensure_wagon_data(table: str, env: str) -> str:
     else:
         sql_file = _wagons_sql_file(env)
 
-    with _connect() as conn:
-        if _table_exists(conn, env_table):
+    try:
+        with _connect() as conn:
+            if _table_exists(conn, env_table):
+                if table == TEILENUMMER_TABLE:
+                    columns = _columns_from_sql_file(teilenummer_sql or TEILENUMMER_SQL_FILE)
+                    _ensure_columns(conn, env_table, columns + ["CHECKED"])
+                    conn.commit()
+                return env_table
+
+            # Kein Auto-Reload mehr beim Öffnen der Seite:
+            # Fehlt die Tabelle, wird nur ein leeres Schema angelegt.
+            columns = _columns_from_sql_file(sql_file)
+            if not columns:
+                columns = ["INIT_PLACEHOLDER"]
+            _create_table_from_columns(conn, env_table, columns)
             if table == TEILENUMMER_TABLE:
-                columns = _columns_from_sql_file(teilenummer_sql or TEILENUMMER_SQL_FILE)
                 _ensure_columns(conn, env_table, columns + ["CHECKED"])
                 conn.commit()
-            return env_table
+    except sqlite3.OperationalError as exc:
+        # Bei temporären Locks beim Start nicht hart abbrechen.
+        if not _is_sqlite_locked_error(exc):
+            raise
 
-        # Kein Auto-Reload mehr beim Öffnen der Seite:
-        # Fehlt die Tabelle, wird nur ein leeres Schema angelegt.
-        columns = _columns_from_sql_file(sql_file)
-        if not columns:
-            columns = ["INIT_PLACEHOLDER"]
-        _create_table_from_columns(conn, env_table, columns)
-        if table == TEILENUMMER_TABLE:
-            _ensure_columns(conn, env_table, columns + ["CHECKED"])
-        conn.commit()
-
-    _record_cache_status(table, env, "empty_init")
+    try:
+        _record_cache_status(table, env, "empty_init")
+    except sqlite3.OperationalError as exc:
+        if not _is_sqlite_locked_error(exc):
+            raise
     return env_table
 
 
@@ -2725,10 +2744,22 @@ def wagons_count(
     table: str = DEFAULT_TABLE,
     env: str = Query(DEFAULT_ENV),
 ) -> dict:
-    table_name = _ensure_wagon_data(table, env)
-    with _connect() as conn:
-        total = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-    return {"table": table_name, "total": total, "env": _normalize_env(env)}
+    table_name = _table_for(table, env)
+    normalized = _normalize_env(env)
+    for _ in range(5):
+        try:
+            table_name = _ensure_wagon_data(table, env)
+            with _connect() as conn:
+                total = conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0]
+            return {"table": table_name, "total": total, "env": normalized}
+        except sqlite3.OperationalError as exc:
+            if _is_sqlite_locked_error(exc):
+                time.sleep(0.25)
+                continue
+            if _is_sqlite_missing_table_error(exc):
+                return {"table": table_name, "total": 0, "env": normalized}
+            raise
+    return {"table": table_name, "total": 0, "env": normalized}
 
 
 @app.get("/api/wagons/chunk")
@@ -2738,28 +2769,56 @@ def wagons_chunk(
     table: str = DEFAULT_TABLE,
     env: str = Query(DEFAULT_ENV),
 ) -> dict:
-    table_name = _ensure_wagon_data(table, env)
-    with _connect() as conn:
-        if table_name == _table_for(TEILENUMMER_TABLE, env):
-            cursor = conn.execute(
-                f'SELECT rowid AS "ROWID", * FROM "{table_name}" LIMIT ? OFFSET ?',
-                (limit, offset),
-            )
-        else:
-            cursor = conn.execute(
-                f"SELECT * FROM {table_name} LIMIT ? OFFSET ?",
-                (limit, offset),
-            )
-        rows = [dict(row) for row in cursor.fetchall()]
-        total = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+    table_name = _table_for(table, env)
+    normalized = _normalize_env(env)
+    for _ in range(5):
+        try:
+            table_name = _ensure_wagon_data(table, env)
+            with _connect() as conn:
+                if table_name == _table_for(TEILENUMMER_TABLE, env):
+                    cursor = conn.execute(
+                        f'SELECT rowid AS "ROWID", * FROM "{table_name}" LIMIT ? OFFSET ?',
+                        (limit, offset),
+                    )
+                else:
+                    cursor = conn.execute(
+                        f'SELECT * FROM "{table_name}" LIMIT ? OFFSET ?',
+                        (limit, offset),
+                    )
+                rows = [dict(row) for row in cursor.fetchall()]
+                total = conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0]
+            return {
+                "table": table_name,
+                "rows": rows,
+                "offset": offset,
+                "limit": limit,
+                "returned": len(rows),
+                "total": total,
+                "env": normalized,
+            }
+        except sqlite3.OperationalError as exc:
+            if _is_sqlite_locked_error(exc):
+                time.sleep(0.25)
+                continue
+            if _is_sqlite_missing_table_error(exc):
+                return {
+                    "table": table_name,
+                    "rows": [],
+                    "offset": offset,
+                    "limit": limit,
+                    "returned": 0,
+                    "total": 0,
+                    "env": normalized,
+                }
+            raise
     return {
         "table": table_name,
-        "rows": rows,
+        "rows": [],
         "offset": offset,
         "limit": limit,
-        "returned": len(rows),
-        "total": total,
-        "env": _normalize_env(env),
+        "returned": 0,
+        "total": 0,
+        "env": normalized,
     }
 
 
