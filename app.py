@@ -15,6 +15,8 @@ import subprocess
 import sys
 import time
 from urllib.parse import parse_qs, quote, urlparse
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -1170,29 +1172,81 @@ class AppHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _proxy_to_rsrd_backend(self, method: str, path: str, query: str) -> None:
+        try:
+            _ensure_rsrd_backend()
+        except Exception as exc:
+            self._send_json({"detail": str(exc)}, status=502)
+            return
+
+        target_url = _rsrd_backend_url(path, query)
+        request_body = None
+        if method in {"POST", "PUT", "PATCH"}:
+            content_len = int(self.headers.get("Content-Length", "0") or "0")
+            request_body = self.rfile.read(content_len) if content_len > 0 else None
+
+        req = Request(target_url, data=request_body, method=method)
+        for key, value in self.headers.items():
+            low = key.lower()
+            if low in {"host", "connection", "content-length", "transfer-encoding"}:
+                continue
+            req.add_header(key, value)
+
+        hop_by_hop = {
+            "connection",
+            "keep-alive",
+            "proxy-authenticate",
+            "proxy-authorization",
+            "te",
+            "trailers",
+            "transfer-encoding",
+            "upgrade",
+        }
+
+        try:
+            with urlopen(req, timeout=120) as upstream:
+                status = upstream.getcode()
+                response_body = upstream.read()
+                headers = upstream.getheaders()
+        except HTTPError as exc:
+            status = exc.code
+            response_body = exc.read()
+            headers = exc.headers.items() if exc.headers else []
+        except Exception as exc:
+            self._send_json({"detail": f"Backend-Proxy fehlgeschlagen: {exc}"}, status=502)
+            return
+
+        self.send_response(status)
+        for key, value in headers:
+            low = key.lower()
+            if low in hop_by_hop or low == "content-length":
+                continue
+            if low == "location":
+                parsed_loc = urlparse(value)
+                if parsed_loc.hostname in {"127.0.0.1", "localhost", RSRD_BACKEND_HOST}:
+                    local_path = parsed_loc.path or "/"
+                    if parsed_loc.query:
+                        local_path = f"{local_path}?{parsed_loc.query}"
+                    value = local_path
+            self.send_header(key, value)
+        self.send_header("Content-Length", str(len(response_body)))
+        self.end_headers()
+        if response_body:
+            self.wfile.write(response_body)
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         path = parsed.path
 
         if path == "/apps/christian/AppRSRD" or path.startswith("/apps/christian/AppRSRD/"):
-            try:
-                _ensure_rsrd_backend()
-                self.send_response(302)
-                self.send_header("Location", _rsrd_backend_url(path, parsed.query))
-                self.end_headers()
-            except Exception as exc:
-                self._send_json({"detail": str(exc)}, status=502)
+            self.send_response(302)
+            self.send_header("Location", "/apps/christian/AppRSRD/frontend/rsrd2.html")
+            self.end_headers()
             return
 
         if any(path.startswith(prefix) for prefix in RSRD_API_PREFIXES):
-            try:
-                _ensure_rsrd_backend()
-                self.send_response(307)
-                self.send_header("Location", _rsrd_backend_url(path, parsed.query))
-                self.end_headers()
-            except Exception as exc:
-                self._send_json({"detail": str(exc)}, status=502)
+            self._proxy_to_rsrd_backend("GET", path, parsed.query)
             return
 
         if path == "/apps/christian/AppMehrkilometer/":
@@ -1277,13 +1331,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         path = parsed.path
 
         if any(path.startswith(prefix) for prefix in RSRD_API_PREFIXES):
-            try:
-                _ensure_rsrd_backend()
-                self.send_response(307)
-                self.send_header("Location", _rsrd_backend_url(path, parsed.query))
-                self.end_headers()
-            except Exception as exc:
-                self._send_json({"detail": str(exc)}, status=502)
+            self._proxy_to_rsrd_backend("POST", path, parsed.query)
             return
 
         if path == "/api/mehrkilometer/create-special":
