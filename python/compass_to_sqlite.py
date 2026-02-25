@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+import time
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -31,6 +32,8 @@ load_project_dotenv()
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SQLITE_PATH = get_runtime_root() / "cache.db"
 PROGRESS_CHUNK_SIZE = 100
+LOCK_RETRY_MAX = 60
+LOCK_RETRY_SLEEP_SEC = 0.5
 
 
 def find_file(directory: Path, preferred: List[str], pattern: str) -> Path:
@@ -65,10 +68,11 @@ def ensure_table(
 ) -> None:
     quoted_cols = ", ".join(f'"{col}" TEXT' for col in columns)
     if mode == "replace":
-        conn.execute(f'DROP TABLE IF EXISTS "{table}"')
-        conn.execute(f'CREATE TABLE "{table}" ({quoted_cols})')
+        _execute_sql_with_retry(conn, f'DROP TABLE IF EXISTS "{table}"')
+        _execute_sql_with_retry(conn, f'CREATE TABLE "{table}" ({quoted_cols})')
     else:
-        conn.execute(
+        _execute_sql_with_retry(
+            conn,
             f'CREATE TABLE IF NOT EXISTS "{table}" ({quoted_cols})'
         )
 
@@ -101,7 +105,7 @@ def insert_rows(
     if mode == "replace":
         pass  # already dropped
     elif mode == "truncate":
-        conn.execute(f'DELETE FROM "{table}"')
+        _execute_sql_with_retry(conn, f'DELETE FROM "{table}"')
     placeholders = ", ".join("?" for _ in columns)
     column_list = ", ".join(f'"{col}"' for col in columns)
     sql = f'INSERT INTO "{table}" ({column_list}) VALUES ({placeholders})'
@@ -111,10 +115,53 @@ def insert_rows(
         return 0
     for start in range(0, total, PROGRESS_CHUNK_SIZE):
         chunk = data[start : start + PROGRESS_CHUNK_SIZE]
-        conn.executemany(sql, chunk)
+        _executemany_with_retry(conn, sql, chunk)
         done = start + len(chunk)
         print(f"{done}/{total} Datensätze gespeichert ...", flush=True)
     return total
+
+
+def _is_db_locked_error(exc: sqlite3.OperationalError) -> bool:
+    msg = str(exc).lower()
+    return "database is locked" in msg or "database schema is locked" in msg
+
+
+def _execute_sql_with_retry(conn: sqlite3.Connection, sql: str) -> None:
+    last_exc: Optional[sqlite3.OperationalError] = None
+    for attempt in range(LOCK_RETRY_MAX):
+        try:
+            conn.execute(sql)
+            return
+        except sqlite3.OperationalError as exc:
+            if not _is_db_locked_error(exc):
+                raise
+            last_exc = exc
+            if attempt == LOCK_RETRY_MAX - 1:
+                break
+            time.sleep(LOCK_RETRY_SLEEP_SEC)
+    if last_exc is not None:
+        raise last_exc
+
+
+def _executemany_with_retry(
+    conn: sqlite3.Connection,
+    sql: str,
+    rows: List[List[Optional[object]]],
+) -> None:
+    last_exc: Optional[sqlite3.OperationalError] = None
+    for attempt in range(LOCK_RETRY_MAX):
+        try:
+            conn.executemany(sql, rows)
+            return
+        except sqlite3.OperationalError as exc:
+            if not _is_db_locked_error(exc):
+                raise
+            last_exc = exc
+            if attempt == LOCK_RETRY_MAX - 1:
+                break
+            time.sleep(LOCK_RETRY_SLEEP_SEC)
+    if last_exc is not None:
+        raise last_exc
 
 
 def parse_args() -> argparse.Namespace:
@@ -169,10 +216,12 @@ def main() -> None:
     db_path = Path(args.sqlite_db)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=60)
+    conn.execute("PRAGMA busy_timeout = 60000")
     try:
         ensure_table(conn, args.table, columns, "replace" if args.mode == "replace" else "append")
         inserted = insert_rows(conn, args.table, columns, rows, args.mode)
+        _execute_sql_with_retry(conn, "PRAGMA optimize")
         conn.commit()
     finally:
         conn.close()
