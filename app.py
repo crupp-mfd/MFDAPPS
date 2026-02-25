@@ -230,6 +230,17 @@ def _ensure_rsrd_backend() -> None:
     )
 
 
+def _read_rsrd_backend_log_tail(max_lines: int = 40) -> str:
+    log_path = Path("/tmp/apprsrd-backend.log")
+    try:
+        if not log_path.exists():
+            return ""
+        lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        return "\n".join(lines[-max_lines:])
+    except Exception:
+        return ""
+
+
 def _source_search_dirs() -> list[Path]:
     configured = os.environ.get(MEHR_SOURCE_DIRS_ENV, "").strip()
     raw_dirs: list[Path] = []
@@ -1243,8 +1254,26 @@ class AppHandler(SimpleHTTPRequestHandler):
             status = exc.code
             response_body = exc.read()
             headers = exc.headers.items() if exc.headers else []
+            generic_500 = status >= 500 and response_body.strip().lower() in {
+                b"",
+                b"internal server error",
+                b'{"detail":"internal server error"}',
+                b'{"detail":"internal server error."}',
+            }
+            if generic_500:
+                tail_text = _read_rsrd_backend_log_tail()
+                payload = {
+                    "detail": f"Backend-Fehler {status}",
+                    "backend_log_tail": tail_text or "Kein Log-Tail verfügbar.",
+                }
+                response_body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                headers = [("Content-Type", "application/json; charset=utf-8")]
         except Exception as exc:
-            self._send_json({"detail": f"Backend-Proxy fehlgeschlagen: {exc}"}, status=502)
+            tail_text = _read_rsrd_backend_log_tail()
+            payload = {"detail": f"Backend-Proxy fehlgeschlagen: {exc}"}
+            if tail_text:
+                payload["backend_log_tail"] = tail_text
+            self._send_json(payload, status=502)
             return
 
         self.send_response(status)
