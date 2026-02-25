@@ -211,12 +211,22 @@ def _ensure_rsrd_backend() -> None:
             stderr=subprocess.STDOUT,
         )
 
-    for _ in range(30):
+    for _ in range(150):
         if _is_tcp_reachable(RSRD_BACKEND_HOST, RSRD_BACKEND_PORT):
             return
         time.sleep(0.2)
+    tail_text = ""
+    try:
+        if log_path.exists():
+            lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            tail_text = "\n".join(lines[-25:])
+    except Exception:
+        tail_text = ""
+    detail = "AppRSRD-Backend konnte nicht gestartet werden. Siehe /tmp/apprsrd-backend.log"
+    if tail_text:
+        detail = f"{detail}\n--- log tail ---\n{tail_text}"
     raise RuntimeError(
-        "AppRSRD-Backend konnte nicht gestartet werden. Siehe /tmp/apprsrd-backend.log"
+        detail
     )
 
 
