@@ -1144,15 +1144,25 @@ def _ensure_cache_status_table(conn: sqlite3.Connection) -> None:
     )
 
 
-def _record_cache_status(base_table: str, env: str, source: str, row_count: int | None = None) -> None:
+def _record_cache_status(
+    base_table: str,
+    env: str,
+    source: str,
+    row_count: int | None = None,
+    connect_timeout: float = 30.0,
+    busy_timeout_ms: int = 30000,
+    max_attempts: int = 6,
+    retry_sleep_base: float = 0.25,
+) -> None:
     base_table = _validate_table(base_table)
     normalized = _normalize_env(env)
     env_table = _table_for(base_table, normalized)
     loaded_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
-    for attempt in range(6):
+    attempts = max(1, int(max_attempts))
+    for attempt in range(attempts):
         try:
-            with _connect() as conn:
+            with _connect(timeout=connect_timeout, busy_timeout_ms=busy_timeout_ms) as conn:
                 _ensure_cache_status_table(conn)
                 if row_count is None:
                     row_count = _table_row_count(conn, env_table) if _table_exists(conn, env_table) else 0
@@ -1171,9 +1181,9 @@ def _record_cache_status(base_table: str, env: str, source: str, row_count: int 
                 conn.commit()
                 return
         except sqlite3.OperationalError as exc:
-            if not _is_sqlite_locked_error(exc) or attempt >= 5:
+            if not _is_sqlite_locked_error(exc) or attempt >= (attempts - 1):
                 raise
-            time.sleep(0.25 * (attempt + 1))
+            time.sleep(max(0.0, retry_sleep_base) * (attempt + 1))
 
 
 def _cache_status_for(base_table: str, env: str) -> dict:
@@ -2510,7 +2520,7 @@ def _ensure_wagon_data(table: str, env: str) -> str:
         sql_file = _wagons_sql_file(env)
 
     try:
-        with _connect() as conn:
+        with _connect(timeout=2.0, busy_timeout_ms=2000) as conn:
             if _table_exists(conn, env_table):
                 if table == TEILENUMMER_TABLE:
                     columns = _columns_from_sql_file(teilenummer_sql or TEILENUMMER_SQL_FILE)
@@ -2533,7 +2543,15 @@ def _ensure_wagon_data(table: str, env: str) -> str:
             raise
 
     try:
-        _record_cache_status(table, env, "empty_init")
+        _record_cache_status(
+            table,
+            env,
+            "empty_init",
+            connect_timeout=0.75,
+            busy_timeout_ms=750,
+            max_attempts=1,
+            retry_sleep_base=0.0,
+        )
     except sqlite3.OperationalError as exc:
         if not _is_sqlite_locked_error(exc):
             raise
