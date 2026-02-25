@@ -1134,23 +1134,30 @@ def _record_cache_status(base_table: str, env: str, source: str, row_count: int 
     env_table = _table_for(base_table, normalized)
     loaded_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
-    with _connect() as conn:
-        _ensure_cache_status_table(conn)
-        if row_count is None:
-            row_count = _table_row_count(conn, env_table) if _table_exists(conn, env_table) else 0
-        conn.execute(
-            f"""
-            INSERT INTO {CACHE_STATUS_TABLE} (base_table, env, env_table, row_count, loaded_at, source)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(base_table, env) DO UPDATE SET
-                env_table = excluded.env_table,
-                row_count = excluded.row_count,
-                loaded_at = excluded.loaded_at,
-                source = excluded.source
-            """,
-            (base_table, normalized, env_table, int(row_count), loaded_at, source),
-        )
-        conn.commit()
+    for attempt in range(6):
+        try:
+            with _connect() as conn:
+                _ensure_cache_status_table(conn)
+                if row_count is None:
+                    row_count = _table_row_count(conn, env_table) if _table_exists(conn, env_table) else 0
+                conn.execute(
+                    f"""
+                    INSERT INTO {CACHE_STATUS_TABLE} (base_table, env, env_table, row_count, loaded_at, source)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(base_table, env) DO UPDATE SET
+                        env_table = excluded.env_table,
+                        row_count = excluded.row_count,
+                        loaded_at = excluded.loaded_at,
+                        source = excluded.source
+                    """,
+                    (base_table, normalized, env_table, int(row_count), loaded_at, source),
+                )
+                conn.commit()
+                return
+        except sqlite3.OperationalError as exc:
+            if not _is_sqlite_locked_error(exc) or attempt >= 5:
+                raise
+            time.sleep(0.25 * (attempt + 1))
 
 
 def _cache_status_for(base_table: str, env: str) -> dict:
@@ -1158,36 +1165,52 @@ def _cache_status_for(base_table: str, env: str) -> dict:
     normalized = _normalize_env(env)
     env_table = _table_for(base_table, normalized)
 
-    with _connect() as conn:
-        _ensure_cache_status_table(conn)
-        row = conn.execute(
-            f"SELECT base_table, env, env_table, row_count, loaded_at, source FROM {CACHE_STATUS_TABLE} WHERE base_table = ? AND env = ?",
-            (base_table, normalized),
-        ).fetchone()
-        if row is not None:
-            return {
-                "table": row["base_table"],
-                "env": row["env"],
-                "env_table": row["env_table"],
-                "row_count": int(row["row_count"] or 0),
-                "loaded_at": row["loaded_at"],
-                "source": row["source"] or "reload",
-            }
+    for attempt in range(6):
+        try:
+            with _connect() as conn:
+                _ensure_cache_status_table(conn)
+                row = conn.execute(
+                    f"SELECT base_table, env, env_table, row_count, loaded_at, source FROM {CACHE_STATUS_TABLE} WHERE base_table = ? AND env = ?",
+                    (base_table, normalized),
+                ).fetchone()
+                if row is not None:
+                    return {
+                        "table": row["base_table"],
+                        "env": row["env"],
+                        "env_table": row["env_table"],
+                        "row_count": int(row["row_count"] or 0),
+                        "loaded_at": row["loaded_at"],
+                        "source": row["source"] or "reload",
+                    }
 
-        if _table_exists(conn, env_table):
-            inferred_loaded_at = None
-            try:
-                inferred_loaded_at = datetime.utcfromtimestamp(DB_PATH.stat().st_mtime).replace(microsecond=0).isoformat() + "Z"
-            except OSError:
-                pass
-            return {
-                "table": base_table,
-                "env": normalized,
-                "env_table": env_table,
-                "row_count": _table_row_count(conn, env_table),
-                "loaded_at": inferred_loaded_at,
-                "source": "inferred",
-            }
+                if _table_exists(conn, env_table):
+                    inferred_loaded_at = None
+                    try:
+                        inferred_loaded_at = datetime.utcfromtimestamp(DB_PATH.stat().st_mtime).replace(microsecond=0).isoformat() + "Z"
+                    except OSError:
+                        pass
+                    return {
+                        "table": base_table,
+                        "env": normalized,
+                        "env_table": env_table,
+                        "row_count": _table_row_count(conn, env_table),
+                        "loaded_at": inferred_loaded_at,
+                        "source": "inferred",
+                    }
+                break
+        except sqlite3.OperationalError as exc:
+            if not _is_sqlite_locked_error(exc):
+                raise
+            if attempt >= 5:
+                return {
+                    "table": base_table,
+                    "env": normalized,
+                    "env_table": env_table,
+                    "row_count": 0,
+                    "loaded_at": None,
+                    "source": "locked",
+                }
+            time.sleep(0.25 * (attempt + 1))
 
     return {
         "table": base_table,
