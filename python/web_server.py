@@ -365,6 +365,7 @@ _jobs_lock = threading.Lock()
 _jobs: Dict[str, Dict[str, Any]] = {}
 _dryrun_trace_lock = threading.Lock()
 _dryrun_trace_seq = 0
+_sqlite_conn_lock = threading.RLock()
 _reload_merge_state_lock = threading.Lock()
 _reload_merge_thread_id: int | None = None
 DATALAKE_SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9_]+$")
@@ -608,33 +609,34 @@ def _connect(timeout: float = 30.0, busy_timeout_ms: int = 30000):
     else:
         raise sqlite3.OperationalError("database is locked")
 
-    db_path = Path(DB_PATH)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    db_path.touch(exist_ok=True)
-    last_error: sqlite3.OperationalError | None = None
-    conn: sqlite3.Connection | None = None
-    for attempt in range(6):
+    with _sqlite_conn_lock:
+        db_path = Path(DB_PATH)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_path.touch(exist_ok=True)
+        last_error: sqlite3.OperationalError | None = None
+        conn: sqlite3.Connection | None = None
+        for attempt in range(6):
+            try:
+                conn = sqlite3.connect(str(db_path), timeout=timeout, isolation_level=None)
+                conn.row_factory = sqlite3.Row
+                conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
+                break
+            except sqlite3.OperationalError as exc:
+                last_error = exc
+                if not _is_sqlite_locked_error(exc) or attempt == 5:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+        if conn is None and last_error is not None:
+            raise last_error
+        if conn is None:
+            raise sqlite3.OperationalError(f"SQLite Verbindung fehlgeschlagen: {db_path}")
         try:
-            conn = sqlite3.connect(str(db_path), timeout=timeout, isolation_level=None)
-            conn.row_factory = sqlite3.Row
-            conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
-            break
-        except sqlite3.OperationalError as exc:
-            last_error = exc
-            if not _is_sqlite_locked_error(exc) or attempt == 5:
-                raise
-            time.sleep(0.05 * (attempt + 1))
-    if conn is None and last_error is not None:
-        raise last_error
-    if conn is None:
-        raise sqlite3.OperationalError(f"SQLite Verbindung fehlgeschlagen: {db_path}")
-    try:
-        yield conn
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+            yield conn
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _ensure_swap_table(conn: sqlite3.Connection, table_name: str) -> None:
