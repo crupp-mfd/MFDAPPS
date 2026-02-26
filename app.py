@@ -14,6 +14,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import threading
 from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
@@ -106,6 +107,7 @@ DATALAKE_API_PREFIXES = ("/api/datalake-sync", "/api/datalake", "/api/datalake/"
 
 BACKEND_SPECS: dict[str, dict[str, str | int]] = {
     "rsrd": {
+        "key": "rsrd",
         "name": "AppRSRD",
         "host": BACKEND_HOST,
         "port": RSRD_BACKEND_PORT,
@@ -113,6 +115,7 @@ BACKEND_SPECS: dict[str, dict[str, str | int]] = {
         "log_path": "/tmp/apprsrd-backend.log",
     },
     "teilenummer": {
+        "key": "teilenummer",
         "name": "AppTeilenummer",
         "host": BACKEND_HOST,
         "port": TEILENUMMER_BACKEND_PORT,
@@ -120,6 +123,7 @@ BACKEND_SPECS: dict[str, dict[str, str | int]] = {
         "log_path": "/tmp/appteilenummer-backend.log",
     },
     "datalake": {
+        "key": "datalake",
         "name": "AppDataLakeSync",
         "host": BACKEND_HOST,
         "port": DATALAKE_BACKEND_PORT,
@@ -127,6 +131,8 @@ BACKEND_SPECS: dict[str, dict[str, str | int]] = {
         "log_path": "/tmp/appdatalake-backend.log",
     },
 }
+_job_backend_lock = threading.Lock()
+_job_backend_map: dict[str, str] = {}
 FABRIC_REQUIRED_ENV_VARS = (
     "FABRIC_SQL_SERVER",
     "FABRIC_SQL_DATABASE",
@@ -202,7 +208,39 @@ def _resolve_runtime_root() -> Path:
     return runtime_root
 
 
+def _remember_job_backend(job_id: str, spec: dict[str, str | int]) -> None:
+    key = str(spec.get("key") or "")
+    if not job_id or not key:
+        return
+    with _job_backend_lock:
+        _job_backend_map[job_id] = key
+
+
+def _backend_for_job(job_id: str) -> dict[str, str | int] | None:
+    if not job_id:
+        return None
+    with _job_backend_lock:
+        key = _job_backend_map.get(job_id)
+    if not key:
+        return None
+    return BACKEND_SPECS.get(key)
+
+
+def _extract_job_id_from_path(path: str) -> str:
+    prefix = "/api/rsrd2/jobs/"
+    if not path.startswith(prefix):
+        return ""
+    rest = path[len(prefix) :]
+    if not rest:
+        return ""
+    return rest.split("/", 1)[0].strip()
+
+
 def _backend_spec_for_path(path: str) -> dict[str, str | int] | None:
+    if path.startswith("/api/rsrd2/jobs/"):
+        mapped = _backend_for_job(_extract_job_id_from_path(path))
+        if mapped is not None:
+            return mapped
     if any(path.startswith(prefix) for prefix in DATALAKE_API_PREFIXES):
         return BACKEND_SPECS["datalake"]
     if any(path.startswith(prefix) for prefix in TEILENUMMER_API_PREFIXES):
@@ -1332,6 +1370,20 @@ class AppHandler(SimpleHTTPRequestHandler):
                 payload["backend_log_tail"] = tail_text
             self._send_json(payload, status=502)
             return
+
+        # Remember which backend owns async jobs so /api/rsrd2/jobs/{id} can be routed correctly.
+        try:
+            if response_body:
+                payload = json.loads(response_body.decode("utf-8"))
+                if isinstance(payload, dict):
+                    job_id = payload.get("job_id") or payload.get("id")
+                    if isinstance(job_id, str) and job_id:
+                        _remember_job_backend(job_id, backend_spec)
+            path_job_id = _extract_job_id_from_path(path)
+            if path_job_id and status < 400:
+                _remember_job_backend(path_job_id, backend_spec)
+        except Exception:
+            pass
 
         self.send_response(status)
         for key, value in headers:
