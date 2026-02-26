@@ -10976,6 +10976,7 @@ def rsrd2_job_status(job_id: str) -> dict:
     return _job_snapshot(job_id)
 
 
+@app.get("/api/rsrd2/sqlite_locks")
 @app.get("/api/debug/sqlite_locks")
 def debug_sqlite_locks() -> dict:
     return _sqlite_lock_debug_snapshot()
