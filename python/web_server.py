@@ -2919,6 +2919,7 @@ def _run_compass_to_sqlite(
     table: str,
     env: str,
     timeout_seconds: int | None = None,
+    mode: str = "replace",
 ) -> subprocess.CompletedProcess[str]:
     ionapi = _ionapi_path(env, "compass")
     normalized = _normalize_env(env)
@@ -2934,7 +2935,7 @@ def _run_compass_to_sqlite(
         "--sqlite-db",
         str(DB_PATH),
         "--mode",
-        "replace",
+        mode,
         "--ionapi",
         str(ionapi),
     ]
@@ -4498,7 +4499,7 @@ def _build_teilenummer_reload_cmd(env: str) -> List[str]:
         "--sqlite-db",
         str(DB_PATH),
         "--mode",
-        "replace",
+        "truncate",
         "--ionapi",
         str(ionapi),
     ]
@@ -4850,6 +4851,7 @@ def reload_teilenummer(env: str = Query(DEFAULT_ENV)) -> dict:
             table_name,
             env,
             timeout_seconds=TEILENUMMER_RELOAD_TIMEOUT_SEC,
+            mode="truncate",
         )
     except subprocess.TimeoutExpired as exc:
         timeout_label = int(TEILENUMMER_RELOAD_TIMEOUT_SEC)
