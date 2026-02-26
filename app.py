@@ -84,18 +84,49 @@ DEFAULT_PORT = 8000
 DEFAULT_PORT_TRIES = 20
 DEFAULT_YEAR = 2025
 _LEGACY_XLSX_MODULE = None
-RSRD_BACKEND_HOST = os.getenv("MFDAPPS_RSRD_HOST", "127.0.0.1")
-RSRD_BACKEND_PORT = int(os.getenv("MFDAPPS_RSRD_PORT", "8001"))
-RSRD_API_PREFIXES = (
-    "/api/rsrd2",
-    "/api/meta",
-    "/api/wagons",
+BACKEND_HOST = os.getenv("MFDAPPS_BACKEND_HOST", os.getenv("MFDAPPS_RSRD_HOST", "127.0.0.1"))
+RSRD_BACKEND_PORT = int(os.getenv("MFDAPPS_RSRD_PORT", os.getenv("MFDAPPS_BACKEND_PORT_RSRD", "8001")))
+TEILENUMMER_BACKEND_PORT = int(
+    os.getenv("MFDAPPS_TEILENUMMER_PORT", os.getenv("MFDAPPS_BACKEND_PORT_TEILENUMMER", "8002"))
+)
+DATALAKE_BACKEND_PORT = int(
+    os.getenv("MFDAPPS_DATALAKE_PORT", os.getenv("MFDAPPS_BACKEND_PORT_DATALAKE", "8003"))
+)
+
+RSRD_API_PREFIXES = ("/api/rsrd2", "/api/meta")
+TEILENUMMER_API_PREFIXES = (
+    "/api/teilenummer",
     "/api/spareparts",
+    "/api/wagons",
+    "/api/wagensuche",
     "/api/objstrk",
     "/api/renumber",
-    "/api/teilenummer",
-    "/api/datalake-sync",
 )
+DATALAKE_API_PREFIXES = ("/api/datalake-sync", "/api/datalake", "/api/datalake/")
+
+BACKEND_SPECS: dict[str, dict[str, str | int]] = {
+    "rsrd": {
+        "name": "AppRSRD",
+        "host": BACKEND_HOST,
+        "port": RSRD_BACKEND_PORT,
+        "sqlite_file": "rsrd.db",
+        "log_path": "/tmp/apprsrd-backend.log",
+    },
+    "teilenummer": {
+        "name": "AppTeilenummer",
+        "host": BACKEND_HOST,
+        "port": TEILENUMMER_BACKEND_PORT,
+        "sqlite_file": "teilenummer.db",
+        "log_path": "/tmp/appteilenummer-backend.log",
+    },
+    "datalake": {
+        "name": "AppDataLakeSync",
+        "host": BACKEND_HOST,
+        "port": DATALAKE_BACKEND_PORT,
+        "sqlite_file": "datalake.db",
+        "log_path": "/tmp/appdatalake-backend.log",
+    },
+}
 FABRIC_REQUIRED_ENV_VARS = (
     "FABRIC_SQL_SERVER",
     "FABRIC_SQL_DATABASE",
@@ -153,20 +184,12 @@ def _is_tcp_reachable(host: str, port: int) -> bool:
         return False
 
 
-def _rsrd_backend_url(path: str, query: str) -> str:
+def _backend_url(spec: dict[str, str | int], path: str, query: str) -> str:
     suffix = f"?{query}" if query else ""
-    return f"http://{RSRD_BACKEND_HOST}:{RSRD_BACKEND_PORT}{path}{suffix}"
+    return f"http://{spec['host']}:{spec['port']}{path}{suffix}"
 
 
-def _ensure_rsrd_backend() -> None:
-    if _is_tcp_reachable(RSRD_BACKEND_HOST, RSRD_BACKEND_PORT):
-        return
-
-    preferred_python = Path("/Users/crupp/SPAREPART/.venv/bin/python")
-    python_bin = os.environ.get("MFDAPPS_RSRD_PYTHON")
-    if not python_bin:
-        python_bin = str(preferred_python if preferred_python.exists() else Path(sys.executable))
-
+def _resolve_runtime_root() -> Path:
     runtime_root_env = os.environ.get("MFDAPPS_RUNTIME_ROOT", "").strip()
     if runtime_root_env:
         runtime_root = Path(runtime_root_env).expanduser()
@@ -176,7 +199,34 @@ def _ensure_rsrd_backend() -> None:
             runtime_root = REPO_ROOT / "apps" / "christian" / "data"
     runtime_root = runtime_root.resolve()
     runtime_root.mkdir(parents=True, exist_ok=True)
-    sqlite_path = runtime_root / "cache_main.db"
+    return runtime_root
+
+
+def _backend_spec_for_path(path: str) -> dict[str, str | int] | None:
+    if any(path.startswith(prefix) for prefix in DATALAKE_API_PREFIXES):
+        return BACKEND_SPECS["datalake"]
+    if any(path.startswith(prefix) for prefix in TEILENUMMER_API_PREFIXES):
+        return BACKEND_SPECS["teilenummer"]
+    if any(path.startswith(prefix) for prefix in RSRD_API_PREFIXES):
+        return BACKEND_SPECS["rsrd"]
+    return None
+
+
+def _ensure_backend(spec: dict[str, str | int]) -> None:
+    backend_host = str(spec["host"])
+    backend_port = int(spec["port"])
+    if _is_tcp_reachable(backend_host, backend_port):
+        return
+
+    preferred_python = Path("/Users/crupp/SPAREPART/.venv/bin/python")
+    python_bin = os.environ.get("MFDAPPS_RSRD_PYTHON")
+    if not python_bin:
+        python_bin = str(preferred_python if preferred_python.exists() else Path(sys.executable))
+
+    runtime_root = _resolve_runtime_root()
+    sqlite_dir = runtime_root / "sqlite"
+    sqlite_dir.mkdir(parents=True, exist_ok=True)
+    sqlite_path = sqlite_dir / str(spec["sqlite_file"])
     sqlite_path.touch(exist_ok=True)
 
     env = os.environ.copy()
@@ -192,7 +242,7 @@ def _ensure_rsrd_backend() -> None:
         f"{REPO_ROOT / 'apps' / 'christian' / 'AppRSRD' / 'src'}"
     )
 
-    log_path = Path("/tmp/apprsrd-backend.log")
+    log_path = Path(str(spec["log_path"]))
     with log_path.open("ab") as log_file:
         subprocess.Popen(
             [
@@ -201,9 +251,9 @@ def _ensure_rsrd_backend() -> None:
                 "uvicorn",
                 "app_rsrd.main:app",
                 "--host",
-                RSRD_BACKEND_HOST,
+                backend_host,
                 "--port",
-                str(RSRD_BACKEND_PORT),
+                str(backend_port),
             ],
             cwd=REPO_ROOT,
             env=env,
@@ -212,7 +262,7 @@ def _ensure_rsrd_backend() -> None:
         )
 
     for _ in range(150):
-        if _is_tcp_reachable(RSRD_BACKEND_HOST, RSRD_BACKEND_PORT):
+        if _is_tcp_reachable(backend_host, backend_port):
             return
         time.sleep(0.2)
     tail_text = ""
@@ -222,7 +272,7 @@ def _ensure_rsrd_backend() -> None:
             tail_text = "\n".join(lines[-25:])
     except Exception:
         tail_text = ""
-    detail = "AppRSRD-Backend konnte nicht gestartet werden. Siehe /tmp/apprsrd-backend.log"
+    detail = f"{spec['name']}-Backend konnte nicht gestartet werden. Siehe {log_path}"
     if tail_text:
         detail = f"{detail}\n--- log tail ---\n{tail_text}"
     raise RuntimeError(
@@ -230,8 +280,8 @@ def _ensure_rsrd_backend() -> None:
     )
 
 
-def _read_rsrd_backend_log_tail(max_lines: int = 40) -> str:
-    log_path = Path("/tmp/apprsrd-backend.log")
+def _read_backend_log_tail(spec: dict[str, str | int], max_lines: int = 40) -> str:
+    log_path = Path(str(spec["log_path"]))
     try:
         if not log_path.exists():
             return ""
@@ -1205,14 +1255,20 @@ class AppHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _proxy_to_rsrd_backend(self, method: str, path: str, query: str) -> None:
+    def _proxy_to_backend(
+        self,
+        method: str,
+        path: str,
+        query: str,
+        backend_spec: dict[str, str | int],
+    ) -> None:
         try:
-            _ensure_rsrd_backend()
+            _ensure_backend(backend_spec)
         except Exception as exc:
             self._send_json({"detail": str(exc)}, status=502)
             return
 
-        target_url = _rsrd_backend_url(path, query)
+        target_url = _backend_url(backend_spec, path, query)
         request_body = None
         if method in {"POST", "PUT", "PATCH"}:
             content_len = int(self.headers.get("Content-Length", "0") or "0")
@@ -1240,6 +1296,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         if method.upper() == "POST" and (
             path.endswith("/reload")
             or path.startswith("/api/datalake/")
+            or path.startswith("/api/datalake-sync/")
             or path.startswith("/api/teilenummer/")
             or path.startswith("/api/wagensuche/")
         ):
@@ -1261,7 +1318,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 b'{"detail":"internal server error."}',
             }
             if generic_500:
-                tail_text = _read_rsrd_backend_log_tail()
+                tail_text = _read_backend_log_tail(backend_spec)
                 payload = {
                     "detail": f"Backend-Fehler {status}",
                     "backend_log_tail": tail_text or "Kein Log-Tail verfügbar.",
@@ -1269,7 +1326,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 response_body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
                 headers = [("Content-Type", "application/json; charset=utf-8")]
         except Exception as exc:
-            tail_text = _read_rsrd_backend_log_tail()
+            tail_text = _read_backend_log_tail(backend_spec)
             payload = {"detail": f"Backend-Proxy fehlgeschlagen: {exc}"}
             if tail_text:
                 payload["backend_log_tail"] = tail_text
@@ -1283,7 +1340,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 continue
             if low == "location":
                 parsed_loc = urlparse(value)
-                if parsed_loc.hostname in {"127.0.0.1", "localhost", RSRD_BACKEND_HOST}:
+                if parsed_loc.hostname in {"127.0.0.1", "localhost", str(backend_spec["host"])}:
                     local_path = parsed_loc.path or "/"
                     if parsed_loc.query:
                         local_path = f"{local_path}?{parsed_loc.query}"
@@ -1305,8 +1362,9 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             return
 
-        if any(path.startswith(prefix) for prefix in RSRD_API_PREFIXES):
-            self._proxy_to_rsrd_backend("GET", path, parsed.query)
+        backend_spec = _backend_spec_for_path(path)
+        if backend_spec is not None:
+            self._proxy_to_backend("GET", path, parsed.query, backend_spec)
             return
 
         if path == "/apps/christian/AppMehrkilometer/":
@@ -1390,8 +1448,9 @@ class AppHandler(SimpleHTTPRequestHandler):
         query = parse_qs(parsed.query)
         path = parsed.path
 
-        if any(path.startswith(prefix) for prefix in RSRD_API_PREFIXES):
-            self._proxy_to_rsrd_backend("POST", path, parsed.query)
+        backend_spec = _backend_spec_for_path(path)
+        if backend_spec is not None:
+            self._proxy_to_backend("POST", path, parsed.query, backend_spec)
             return
 
         if path == "/api/mehrkilometer/create-special":
