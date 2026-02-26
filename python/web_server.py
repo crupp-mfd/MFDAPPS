@@ -231,6 +231,25 @@ def _init_sqlite_runtime() -> None:
 
 _init_sqlite_runtime()
 
+
+def _ensure_sqlite_wal_ready(max_attempts: int = 20) -> str:
+    last_error: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            with sqlite3.connect(str(DB_PATH), timeout=1, isolation_level=None) as conn:
+                conn.execute("PRAGMA busy_timeout = 1000")
+                row = conn.execute("PRAGMA journal_mode = WAL").fetchone()
+                mode = str(row[0] if row else "").lower()
+                return mode or "unknown"
+        except sqlite3.OperationalError as exc:
+            last_error = exc
+            if not _is_sqlite_locked_error(exc) and "busy" not in str(exc).lower():
+                raise
+            time.sleep(0.2 + (0.1 * attempt))
+    if last_error is not None:
+        raise RuntimeError(f"SQLite ist blockiert: {last_error}")
+    return "unknown"
+
 DEFAULT_SCHEME = os.getenv("SPAREPART_SCHEME", "datalake")
 DEFAULT_CATALOG = os.getenv("SPAREPART_CATALOG")
 DEFAULT_COLLECTION = os.getenv("SPAREPART_DEFAULT_COLLECTION")
@@ -5048,6 +5067,9 @@ def reload_teilenummer_job(env: str = Query(DEFAULT_ENV)) -> dict:
     def prepare(job_id: str):
         _append_job_log(job_id, "Compass-Verbindung wird geprüft ...")
         _precheck_compass_connection(env)
+        _append_job_log(job_id, "SQLite wird vorbereitet ...")
+        wal_mode = _ensure_sqlite_wal_ready()
+        _append_job_log(job_id, f"SQLite journal_mode: {wal_mode}")
         _append_job_log(job_id, "Arbeitsdatenbank wird vorbereitet ...")
         work_db = _prepare_teilenummer_work_db(env)
         _append_job_log(job_id, f"Arbeitsdatenbank: {work_db.name}")
