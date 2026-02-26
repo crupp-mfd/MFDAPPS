@@ -4794,79 +4794,92 @@ def _start_subprocess_job(
         process: subprocess.Popen[str] | None = None
         run_cmd = cmd
         run_finalize_fn = finalize_fn
-        if prepare_fn is not None:
+        exclusive_reload_gate = job_type in {"reload_teilenummer"}
+        gate_owner_id = threading.get_ident()
+        if exclusive_reload_gate:
+            with _reload_merge_state_lock:
+                global _reload_merge_thread_id
+                _reload_merge_thread_id = gate_owner_id
+            _append_job_log(job["id"], "Exklusiver SQLite-Reload aktiv ...")
+        try:
+            if prepare_fn is not None:
+                try:
+                    prepared = prepare_fn(job["id"])
+                    if prepared:
+                        run_cmd, run_finalize_fn = prepared
+                except Exception as exc:  # noqa: BLE001
+                    _append_job_log(job["id"], f"Vorbereitung fehlgeschlagen: {exc}")
+                    _finish_job(job["id"], "error", error=str(exc))
+                    return
             try:
-                prepared = prepare_fn(job["id"])
-                if prepared:
-                    run_cmd, run_finalize_fn = prepared
+                process = subprocess.Popen(
+                    run_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
             except Exception as exc:  # noqa: BLE001
-                _append_job_log(job["id"], f"Vorbereitung fehlgeschlagen: {exc}")
+                _append_job_log(job["id"], f"Start fehlgeschlagen: {exc}")
                 _finish_job(job["id"], "error", error=str(exc))
                 return
-        try:
-            process = subprocess.Popen(
-                run_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-        except Exception as exc:  # noqa: BLE001
-            _append_job_log(job["id"], f"Start fehlgeschlagen: {exc}")
-            _finish_job(job["id"], "error", error=str(exc))
-            return
 
-        assert process.stdout is not None
-        reader_error: Exception | None = None
-        keep_progress_lines = job_type in {"reload_teilenummer"}
+            assert process.stdout is not None
+            reader_error: Exception | None = None
+            keep_progress_lines = job_type in {"reload_teilenummer"}
 
-        def consume_stdout() -> None:
-            nonlocal reader_error
+            def consume_stdout() -> None:
+                nonlocal reader_error
+                try:
+                    for line in process.stdout:
+                        text = line.strip()
+                        if not text or (PROGRESS_LINE.match(text) and not keep_progress_lines):
+                            continue
+                        _append_job_log(job["id"], text)
+                except Exception as exc:  # noqa: BLE001
+                    reader_error = exc
+
+            reader = threading.Thread(target=consume_stdout, daemon=True)
+            reader.start()
+
             try:
-                for line in process.stdout:
-                    text = line.strip()
-                    if not text or (PROGRESS_LINE.match(text) and not keep_progress_lines):
-                        continue
-                    _append_job_log(job["id"], text)
-            except Exception as exc:  # noqa: BLE001
-                reader_error = exc
-
-        reader = threading.Thread(target=consume_stdout, daemon=True)
-        reader.start()
-
-        try:
-            if max_runtime_sec and max_runtime_sec > 0:
-                returncode = process.wait(timeout=max_runtime_sec)
-            else:
-                returncode = process.wait()
-            reader.join(timeout=2.0)
-            if reader_error is not None:
-                raise reader_error
-            if returncode != 0:
-                message = f"Prozess endete mit Code {returncode}"
+                if max_runtime_sec and max_runtime_sec > 0:
+                    returncode = process.wait(timeout=max_runtime_sec)
+                else:
+                    returncode = process.wait()
+                reader.join(timeout=2.0)
+                if reader_error is not None:
+                    raise reader_error
+                if returncode != 0:
+                    message = f"Prozess endete mit Code {returncode}"
+                    _append_job_log(job["id"], message)
+                    _finish_job(job["id"], "error", error=message)
+                    return
+                result = run_finalize_fn(job["id"])
+                _finish_job(job["id"], "success", result=result)
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                    process.wait(timeout=5)
+                except Exception:
+                    pass
+                timeout_label = int(max_runtime_sec) if max_runtime_sec else 0
+                message = f"Prozess-Timeout nach {timeout_label}s"
                 _append_job_log(job["id"], message)
                 _finish_job(job["id"], "error", error=message)
-                return
-            result = run_finalize_fn(job["id"])
-            _finish_job(job["id"], "success", result=result)
-        except subprocess.TimeoutExpired:
-            try:
-                process.kill()
-                process.wait(timeout=5)
-            except Exception:
-                pass
-            timeout_label = int(max_runtime_sec) if max_runtime_sec else 0
-            message = f"Prozess-Timeout nach {timeout_label}s"
-            _append_job_log(job["id"], message)
-            _finish_job(job["id"], "error", error=message)
-        except Exception as exc:  # noqa: BLE001
-            _append_job_log(job["id"], f"Fehler: {exc}")
-            _finish_job(job["id"], "error", error=str(exc))
+            except Exception as exc:  # noqa: BLE001
+                _append_job_log(job["id"], f"Fehler: {exc}")
+                _finish_job(job["id"], "error", error=str(exc))
+            finally:
+                try:
+                    if process is not None and process.stdout is not None:
+                        process.stdout.close()
+                except Exception:
+                    pass
         finally:
-            try:
-                if process is not None and process.stdout is not None:
-                    process.stdout.close()
-            except Exception:
-                pass
+            if exclusive_reload_gate:
+                with _reload_merge_state_lock:
+                    if _reload_merge_thread_id == gate_owner_id:
+                        _reload_merge_thread_id = None
 
     threading.Thread(target=runner, daemon=True).start()
     return job
