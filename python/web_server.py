@@ -4720,14 +4720,26 @@ def _start_subprocess_job(
     env: str,
     finalize_fn,
     max_runtime_sec: int | None = None,
+    prepare_fn=None,
 ) -> Dict[str, Any]:
     job = _create_job(job_type, env)
 
     def runner() -> None:
         process: subprocess.Popen[str] | None = None
+        run_cmd = cmd
+        run_finalize_fn = finalize_fn
+        if prepare_fn is not None:
+            try:
+                prepared = prepare_fn(job["id"])
+                if prepared:
+                    run_cmd, run_finalize_fn = prepared
+            except Exception as exc:  # noqa: BLE001
+                _append_job_log(job["id"], f"Vorbereitung fehlgeschlagen: {exc}")
+                _finish_job(job["id"], "error", error=str(exc))
+                return
         try:
             process = subprocess.Popen(
-                cmd,
+                run_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -4768,7 +4780,7 @@ def _start_subprocess_job(
                 _append_job_log(job["id"], message)
                 _finish_job(job["id"], "error", error=message)
                 return
-            result = finalize_fn(job["id"])
+            result = run_finalize_fn(job["id"])
             _finish_job(job["id"], "success", result=result)
         except subprocess.TimeoutExpired:
             try:
@@ -4840,7 +4852,11 @@ def _prepare_teilenummer_work_db(env: str) -> Path:
     work_db = work_dir / f"{DB_PATH.stem}_reload_{normalized}_{uuid.uuid4().hex[:8]}.db"
     if work_db.exists():
         work_db.unlink()
-    shutil.copy2(DB_PATH, work_db)
+    with sqlite3.connect(str(DB_PATH), timeout=30) as src_conn:
+        src_conn.execute("PRAGMA busy_timeout = 30000")
+        with sqlite3.connect(str(work_db), timeout=30) as dst_conn:
+            src_conn.backup(dst_conn)
+            dst_conn.commit()
     return work_db
 
 
@@ -4943,20 +4959,28 @@ def reload_teilenummer_job(env: str = Query(DEFAULT_ENV)) -> dict:
             "env": existing.get("env") or _normalize_env(env),
             "reused": True,
         }
-    _precheck_compass_connection(env)
-    work_db = _prepare_teilenummer_work_db(env)
+    def prepare(job_id: str):
+        _append_job_log(job_id, "Compass-Verbindung wird geprüft ...")
+        _precheck_compass_connection(env)
+        _append_job_log(job_id, "Arbeitsdatenbank wird vorbereitet ...")
+        work_db = _prepare_teilenummer_work_db(env)
+        _append_job_log(job_id, f"Arbeitsdatenbank: {work_db.name}")
+        cmd_local = _build_teilenummer_reload_cmd(env, sqlite_db_path=work_db)
+        finalize_local = lambda inner_job_id: _finalize_teilenummer_reload_work(inner_job_id, env, work_db)
+        return cmd_local, finalize_local
+
     try:
-        cmd = _build_teilenummer_reload_cmd(env, sqlite_db_path=work_db)
+        cmd = _build_teilenummer_reload_cmd(env, sqlite_db_path=DB_PATH)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     job = _start_subprocess_job(
         "reload_teilenummer",
         cmd,
         env,
-        lambda job_id: _finalize_teilenummer_reload_work(job_id, env, work_db),
+        lambda job_id: _finalize_teilenummer_reload(job_id, env),
         max_runtime_sec=TEILENUMMER_RELOAD_TIMEOUT_SEC,
+        prepare_fn=prepare,
     )
-    _append_job_log(job["id"], f"Arbeitsdatenbank: {work_db.name}")
     return {"job_id": job["id"], "status": job["status"], "env": job["env"]}
 
 
