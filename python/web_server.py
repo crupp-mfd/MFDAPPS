@@ -4838,8 +4838,6 @@ def _finalize_teilenummer_reload(job_id: str, env: str) -> Dict[str, Any]:
 
 def _prepare_teilenummer_work_db(env: str) -> Path:
     normalized = _normalize_env(env)
-    if not DB_PATH.exists():
-        raise HTTPException(status_code=500, detail=f"SQLite DB nicht gefunden: {DB_PATH}")
     work_dir = DB_PATH.parent
     work_dir.mkdir(parents=True, exist_ok=True)
     now = time.time()
@@ -4852,24 +4850,47 @@ def _prepare_teilenummer_work_db(env: str) -> Path:
     work_db = work_dir / f"{DB_PATH.stem}_reload_{normalized}_{uuid.uuid4().hex[:8]}.db"
     if work_db.exists():
         work_db.unlink()
-    with sqlite3.connect(str(DB_PATH), timeout=30) as src_conn:
-        src_conn.execute("PRAGMA busy_timeout = 30000")
-        with sqlite3.connect(str(work_db), timeout=30) as dst_conn:
-            src_conn.backup(dst_conn)
-            dst_conn.commit()
+    with sqlite3.connect(str(work_db), timeout=5):
+        pass
     return work_db
 
 
 def _finalize_teilenummer_reload_work(job_id: str, env: str, work_db: Path) -> Dict[str, Any]:
     table_name = _table_for(TEILENUMMER_TABLE, env)
-    with sqlite3.connect(str(work_db), timeout=30) as conn:
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 30000")
-        _ensure_columns(conn, table_name, ["CHECKED"])
+    with sqlite3.connect(str(work_db), timeout=30) as source_conn:
+        source_conn.row_factory = sqlite3.Row
+        source_conn.execute("PRAGMA busy_timeout = 30000")
+        source_columns = [
+            str(row["name"] or "")
+            for row in source_conn.execute(f'PRAGMA table_info("{table_name}")').fetchall()
+            if str(row["name"] or "")
+        ]
+        if not source_columns:
+            raise RuntimeError(f"Reload-Tabelle {table_name} fehlt in Arbeitsdatenbank.")
+    with _connect(timeout=30.0, busy_timeout_ms=30000) as conn:
+        if not _table_exists(conn, table_name):
+            column_defs = ", ".join(f'"{col}" TEXT' for col in source_columns + ["CHECKED"])
+            conn.execute(f'CREATE TABLE IF NOT EXISTS "{table_name}" ({column_defs})')
+        _ensure_columns(conn, table_name, source_columns + ["CHECKED"])
+        work_db_sql = str(work_db).replace("'", "''")
+        conn.execute(f"ATTACH DATABASE '{work_db_sql}' AS workdb")
+        try:
+            column_list = ", ".join(f'"{col}"' for col in source_columns)
+            conn.execute(f'DELETE FROM "{table_name}"')
+            conn.execute(
+                f'INSERT INTO "{table_name}" ({column_list}) '
+                f'SELECT {column_list} FROM workdb."{table_name}"'
+            )
+        finally:
+            conn.execute("DETACH DATABASE workdb")
         conn.execute(f'UPDATE "{table_name}" SET "CHECKED" = ""')
         count_rows = int(conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0] or 0)
         conn.commit()
-    os.replace(str(work_db), str(DB_PATH))
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            Path(f"{work_db}{suffix}").unlink(missing_ok=True)
+        except Exception:
+            pass
     _record_cache_status(TEILENUMMER_TABLE, env, "manual_reload", row_count=count_rows)
     _append_job_log(job_id, f"Reload abgeschlossen: {count_rows} Datensätze.")
     return {"rows": count_rows}
