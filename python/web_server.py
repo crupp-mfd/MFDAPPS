@@ -62,7 +62,7 @@ except Exception:
         last_error: sqlite3.OperationalError | None = None
         for attempt in range(6):
             try:
-                conn = sqlite3.connect(str(db_path), timeout=30)
+                conn = sqlite3.connect(str(db_path), timeout=30, isolation_level=None)
                 conn.row_factory = sqlite3.Row
                 conn.execute("PRAGMA busy_timeout = 30000")
                 return conn
@@ -586,7 +586,7 @@ def _connect(timeout: float = 30.0, busy_timeout_ms: int = 30000):
     conn: sqlite3.Connection | None = None
     for attempt in range(6):
         try:
-            conn = sqlite3.connect(str(db_path), timeout=timeout)
+            conn = sqlite3.connect(str(db_path), timeout=timeout, isolation_level=None)
             conn.row_factory = sqlite3.Row
             conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
             break
