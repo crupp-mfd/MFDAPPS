@@ -137,6 +137,10 @@ def _resolve_runtime_path(value: str | None, default_name: str) -> Path:
 DB_PATH = _resolve_runtime_path(os.getenv("SQLITE_PATH"), "cache.db")
 API_LOG_PATH = _resolve_runtime_path(os.getenv("API_LOG_PATH"), "API.log")
 DRYRUN_TRACE_PATH = _resolve_runtime_path(os.getenv("DRYRUN_TRACE_PATH"), "dryrun_api_calls.txt")
+_SQLITE_JOURNAL_MODES = {"DELETE", "WAL", "TRUNCATE", "PERSIST", "MEMORY", "OFF"}
+SQLITE_JOURNAL_MODE = (os.getenv("SQLITE_JOURNAL_MODE", "DELETE") or "DELETE").strip().upper()
+if SQLITE_JOURNAL_MODE not in _SQLITE_JOURNAL_MODES:
+    SQLITE_JOURNAL_MODE = "DELETE"
 
 # Guard against legacy root-level DB path leaking in from older shells.
 if DB_PATH.resolve() == (PROJECT_ROOT / "cache.db").resolve():
@@ -222,7 +226,7 @@ DRYRUN_TRACE_PATH.parent.mkdir(parents=True, exist_ok=True)
 def _init_sqlite_runtime() -> None:
     try:
         with sqlite3.connect(str(DB_PATH), timeout=10) as conn:
-            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute(f"PRAGMA journal_mode = {SQLITE_JOURNAL_MODE}")
             conn.execute("PRAGMA synchronous = NORMAL")
             conn.execute("PRAGMA busy_timeout = 30000")
     except sqlite3.OperationalError:
@@ -233,6 +237,7 @@ _init_sqlite_runtime()
 
 
 def _ensure_sqlite_wal_ready(max_attempts: int = 20) -> str:
+    desired_mode = SQLITE_JOURNAL_MODE.lower()
     last_error: Exception | None = None
     for attempt in range(max_attempts):
         try:
@@ -240,9 +245,9 @@ def _ensure_sqlite_wal_ready(max_attempts: int = 20) -> str:
                 conn.execute("PRAGMA busy_timeout = 1000")
                 current_row = conn.execute("PRAGMA journal_mode").fetchone()
                 current_mode = str(current_row[0] if current_row else "").lower()
-                if current_mode == "wal":
-                    return "wal"
-                row = conn.execute("PRAGMA journal_mode = WAL").fetchone()
+                if current_mode == desired_mode:
+                    return desired_mode
+                row = conn.execute(f"PRAGMA journal_mode = {SQLITE_JOURNAL_MODE}").fetchone()
                 mode = str(row[0] if row else "").lower()
                 return mode or (current_mode or "unknown")
         except sqlite3.OperationalError as exc:
