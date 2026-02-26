@@ -14,6 +14,7 @@ import shutil
 import sys
 import json
 import re
+import errno
 from urllib.parse import urlsplit, urlunsplit, urlencode, unquote, quote
 from pathlib import Path
 from typing import List, Dict, Any, Mapping, Optional
@@ -4654,6 +4655,56 @@ def _job_snapshot(job_id: str) -> Dict[str, Any]:
         snapshot = dict(job)
         snapshot["logs"] = list(job.get("logs", []))
     return snapshot
+
+
+def _sqlite_lock_debug_snapshot() -> Dict[str, Any]:
+    db_real = DB_PATH.resolve()
+    try:
+        db_stat = db_real.stat()
+    except OSError as exc:
+        return {
+            "db_path": str(db_real),
+            "error": f"stat fehlgeschlagen: {exc}",
+            "locks": [],
+        }
+
+    inode_text = str(db_stat.st_ino)
+    locks: List[Dict[str, Any]] = []
+    try:
+        with open("/proc/locks", "r", encoding="utf-8", errors="ignore") as handle:
+            for raw in handle:
+                line = raw.strip()
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) < 6:
+                    continue
+                inode_part = parts[5].split(":")[-1]
+                if inode_part != inode_text:
+                    continue
+                pid = parts[4]
+                cmdline = ""
+                try:
+                    cmdline_raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+                    cmdline = cmdline_raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore").strip()
+                except OSError as exc:
+                    if exc.errno not in {errno.ENOENT, errno.EACCES}:
+                        cmdline = f"<cmdline-fehler: {exc}>"
+                locks.append({"line": line, "pid": pid, "cmdline": cmdline})
+    except OSError as exc:
+        return {
+            "db_path": str(db_real),
+            "inode": inode_text,
+            "error": f"/proc/locks nicht lesbar: {exc}",
+            "locks": [],
+        }
+
+    return {
+        "db_path": str(db_real),
+        "inode": inode_text,
+        "lock_count": len(locks),
+        "locks": locks,
+    }
 
 
 def _goldenview_safe_name(name: str) -> str:
@@ -10923,6 +10974,11 @@ def rsrd2_load_erp_full(env: str = Query(DEFAULT_ENV)) -> dict:
 @app.get("/api/rsrd2/jobs/{job_id}")
 def rsrd2_job_status(job_id: str) -> dict:
     return _job_snapshot(job_id)
+
+
+@app.get("/api/debug/sqlite_locks")
+def debug_sqlite_locks() -> dict:
+    return _sqlite_lock_debug_snapshot()
 
 
 @app.get("/api/rsrd2/wagons")
