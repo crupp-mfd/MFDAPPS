@@ -6,6 +6,7 @@ import time
 import io
 import mimetypes
 import importlib
+from contextlib import contextmanager
 from xml.sax.saxutils import escape as xml_escape
 import sqlite3
 import subprocess
@@ -545,26 +546,36 @@ def _init_goldenview_db(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {GOLDENVIEW_QUERIES_TABLE} ADD COLUMN {column} TEXT")
 
 
-def _connect(timeout: float = 30.0, busy_timeout_ms: int = 30000) -> sqlite3.Connection:
+@contextmanager
+def _connect(timeout: float = 30.0, busy_timeout_ms: int = 30000):
     if not DB_PATH.exists():
         raise HTTPException(status_code=500, detail=f"SQLite DB nicht gefunden: {DB_PATH}")
     db_path = Path(DB_PATH)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     last_error: sqlite3.OperationalError | None = None
+    conn: sqlite3.Connection | None = None
     for attempt in range(6):
         try:
             conn = sqlite3.connect(str(db_path), timeout=timeout)
             conn.row_factory = sqlite3.Row
             conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
-            return conn
+            break
         except sqlite3.OperationalError as exc:
             last_error = exc
             if not _is_sqlite_locked_error(exc) or attempt == 5:
                 raise
             time.sleep(0.05 * (attempt + 1))
-    if last_error is not None:
+    if conn is None and last_error is not None:
         raise last_error
-    raise sqlite3.OperationalError(f"SQLite Verbindung fehlgeschlagen: {db_path}")
+    if conn is None:
+        raise sqlite3.OperationalError(f"SQLite Verbindung fehlgeschlagen: {db_path}")
+    try:
+        yield conn
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _ensure_swap_table(conn: sqlite3.Connection, table_name: str) -> None:
