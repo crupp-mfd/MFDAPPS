@@ -4960,7 +4960,7 @@ def _finalize_teilenummer_reload_work(job_id: str, env: str, work_db: Path) -> D
     try:
         for attempt in range(merge_attempts):
             try:
-                with _connect(timeout=60.0, busy_timeout_ms=60000) as conn:
+                with _connect(timeout=5.0, busy_timeout_ms=5000) as conn:
                     if not _table_exists(conn, table_name):
                         column_defs = ", ".join(f'"{col}" TEXT' for col in source_columns + ["CHECKED"])
                         conn.execute(f'CREATE TABLE IF NOT EXISTS "{table_name}" ({column_defs})')
@@ -5092,7 +5092,12 @@ def reload_teilenummer_job(env: str = Query(DEFAULT_ENV)) -> dict:
         _append_job_log(job_id, "SQLite wird vorbereitet ...")
         wal_mode = _ensure_sqlite_wal_ready()
         _append_job_log(job_id, f"SQLite journal_mode: {wal_mode}")
-        _append_job_log(job_id, "Reload wird direkt auf SQLite ausgeführt ...")
+        _append_job_log(job_id, "Arbeitsdatenbank wird vorbereitet ...")
+        work_db = _prepare_teilenummer_work_db(env)
+        _append_job_log(job_id, f"Arbeitsdatenbank: {work_db.name}")
+        cmd_local = _build_teilenummer_reload_cmd(env, sqlite_db_path=work_db)
+        finalize_local = lambda inner_job_id: _finalize_teilenummer_reload_work(inner_job_id, env, work_db)
+        return cmd_local, finalize_local
 
     try:
         cmd = _build_teilenummer_reload_cmd(env, sqlite_db_path=DB_PATH)
