@@ -4111,9 +4111,9 @@ const reloadData = async () => {
       source: envMeta?.urls?.compass,
       target: targets,
     });
-    showOverlay({ showRandomImage: true });
+    showOverlay({ showRandomImage: false, showProgress: false });
     setStatus("Datenbank wird neu geladen ...");
-    setIndeterminate(true);
+    setIndeterminate(false);
     await reloadWagonTable(config);
     await startModuleWorkflow({ skipReload: true });
   } catch (error) {

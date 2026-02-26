@@ -304,6 +304,10 @@ CRS335_ACRF = os.getenv("SPAREPART_CRS335_ACRF", "").strip()
 
 JOB_LOG_LIMIT = 2000
 PROGRESS_LINE = re.compile(r"^\d+/\d+\s+Datensätze gespeichert \.\.\.$")
+TEILENUMMER_RELOAD_TIMEOUT_SEC = max(
+    60,
+    int(os.getenv("TEILENUMMER_RELOAD_TIMEOUT_SEC", "600") or 600),
+)
 _jobs_lock = threading.Lock()
 _jobs: Dict[str, Dict[str, Any]] = {}
 _dryrun_trace_lock = threading.Lock()
@@ -2906,7 +2910,12 @@ def favicon() -> Response:
     return Response(status_code=204)
 
 
-def _run_compass_to_sqlite(sql_file: Path, table: str, env: str) -> subprocess.CompletedProcess[str]:
+def _run_compass_to_sqlite(
+    sql_file: Path,
+    table: str,
+    env: str,
+    timeout_seconds: int | None = None,
+) -> subprocess.CompletedProcess[str]:
     ionapi = _ionapi_path(env, "compass")
     normalized = _normalize_env(env)
     cmd = [
@@ -2927,7 +2936,8 @@ def _run_compass_to_sqlite(sql_file: Path, table: str, env: str) -> subprocess.C
     ]
     if normalized == "tst" and TST_COMPASS_JDBC.exists():
         cmd.extend(["--jdbc-jar", str(TST_COMPASS_JDBC)])
-    return subprocess.run(cmd, capture_output=True, text=True)
+    run_timeout = int(timeout_seconds) if timeout_seconds and timeout_seconds > 0 else None
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=run_timeout)
 
 
 def _run_compass_query_internal(sql: str, env: str, timeout_seconds: int | None = None) -> Dict[str, Any]:
@@ -4663,10 +4673,12 @@ def _start_subprocess_job(
     cmd: List[str],
     env: str,
     finalize_fn,
+    max_runtime_sec: int | None = None,
 ) -> Dict[str, Any]:
     job = _create_job(job_type, env)
 
     def runner() -> None:
+        process: subprocess.Popen[str] | None = None
         try:
             process = subprocess.Popen(
                 cmd,
@@ -4678,15 +4690,33 @@ def _start_subprocess_job(
             _append_job_log(job["id"], f"Start fehlgeschlagen: {exc}")
             _finish_job(job["id"], "error", error=str(exc))
             return
+
         assert process.stdout is not None
+        reader_error: Exception | None = None
+        keep_progress_lines = job_type in {"reload_teilenummer"}
+
+        def consume_stdout() -> None:
+            nonlocal reader_error
+            try:
+                for line in process.stdout:
+                    text = line.strip()
+                    if not text or (PROGRESS_LINE.match(text) and not keep_progress_lines):
+                        continue
+                    _append_job_log(job["id"], text)
+            except Exception as exc:  # noqa: BLE001
+                reader_error = exc
+
+        reader = threading.Thread(target=consume_stdout, daemon=True)
+        reader.start()
+
         try:
-            for line in process.stdout:
-                text = line.strip()
-                keep_progress_lines = job_type in {"reload_teilenummer"}
-                if not text or (PROGRESS_LINE.match(text) and not keep_progress_lines):
-                    continue
-                _append_job_log(job["id"], text)
-            returncode = process.wait()
+            if max_runtime_sec and max_runtime_sec > 0:
+                returncode = process.wait(timeout=max_runtime_sec)
+            else:
+                returncode = process.wait()
+            reader.join(timeout=2.0)
+            if reader_error is not None:
+                raise reader_error
             if returncode != 0:
                 message = f"Prozess endete mit Code {returncode}"
                 _append_job_log(job["id"], message)
@@ -4694,12 +4724,23 @@ def _start_subprocess_job(
                 return
             result = finalize_fn(job["id"])
             _finish_job(job["id"], "success", result=result)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+                process.wait(timeout=5)
+            except Exception:
+                pass
+            timeout_label = int(max_runtime_sec) if max_runtime_sec else 0
+            message = f"Prozess-Timeout nach {timeout_label}s"
+            _append_job_log(job["id"], message)
+            _finish_job(job["id"], "error", error=message)
         except Exception as exc:  # noqa: BLE001
             _append_job_log(job["id"], f"Fehler: {exc}")
             _finish_job(job["id"], "error", error=str(exc))
         finally:
             try:
-                process.stdout.close()
+                if process is not None and process.stdout is not None:
+                    process.stdout.close()
             except Exception:
                 pass
 
@@ -4782,7 +4823,20 @@ def reload_teilenummer(env: str = Query(DEFAULT_ENV)) -> dict:
     if not sql_file.exists():
         raise HTTPException(status_code=500, detail=f"SQL-Datei nicht gefunden: {sql_file}")
     table_name = _table_for(TEILENUMMER_TABLE, env)
-    result = _run_compass_to_sqlite(sql_file, table_name, env)
+    try:
+        result = _run_compass_to_sqlite(
+            sql_file,
+            table_name,
+            env,
+            timeout_seconds=TEILENUMMER_RELOAD_TIMEOUT_SEC,
+        )
+    except subprocess.TimeoutExpired as exc:
+        timeout_label = int(TEILENUMMER_RELOAD_TIMEOUT_SEC)
+        stderr_text = (exc.stderr or exc.output or "").strip() if isinstance(exc.stderr or exc.output, str) else ""
+        detail = f"Reload Timeout nach {timeout_label}s."
+        if stderr_text:
+            detail = f"{detail} {stderr_text}"
+        raise HTTPException(status_code=500, detail=detail) from exc
     if result.returncode != 0:
         raise HTTPException(
             status_code=500,
@@ -4798,11 +4852,16 @@ def reload_teilenummer(env: str = Query(DEFAULT_ENV)) -> dict:
 
 @app.post("/api/teilenummer/reload_job")
 def reload_teilenummer_job(env: str = Query(DEFAULT_ENV)) -> dict:
+    try:
+        cmd = _build_teilenummer_reload_cmd(env)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     job = _start_subprocess_job(
         "reload_teilenummer",
-        _build_teilenummer_reload_cmd(env),
+        cmd,
         env,
         lambda job_id: _finalize_teilenummer_reload(job_id, env),
+        max_runtime_sec=TEILENUMMER_RELOAD_TIMEOUT_SEC,
     )
     return {"job_id": job["id"], "status": job["status"], "env": job["env"]}
 
