@@ -4840,11 +4840,7 @@ def _prepare_teilenummer_work_db(env: str) -> Path:
     work_db = work_dir / f"{DB_PATH.stem}_reload_{normalized}_{uuid.uuid4().hex[:8]}.db"
     if work_db.exists():
         work_db.unlink()
-    with sqlite3.connect(str(DB_PATH), timeout=30) as src_conn:
-        src_conn.execute("PRAGMA busy_timeout = 30000")
-        with sqlite3.connect(str(work_db), timeout=30) as dst_conn:
-            src_conn.backup(dst_conn)
-            dst_conn.commit()
+    shutil.copy2(DB_PATH, work_db)
     return work_db
 
 
