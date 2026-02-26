@@ -4904,16 +4904,6 @@ def _finalize_teilenummer_reload_work(job_id: str, env: str, work_db: Path) -> D
     for attempt in range(merge_attempts):
         try:
             with _connect(timeout=60.0, busy_timeout_ms=60000) as conn:
-                try:
-                    mode_row = conn.execute("PRAGMA journal_mode = WAL").fetchone()
-                    mode_value = str(mode_row[0] if mode_row else "").lower()
-                    if attempt == 0:
-                        _append_job_log(
-                            job_id,
-                            f"SQLite journal_mode im Merge: {mode_value or 'unbekannt'}",
-                        )
-                except sqlite3.OperationalError:
-                    pass
                 if not _table_exists(conn, table_name):
                     column_defs = ", ".join(f'"{col}" TEXT' for col in source_columns + ["CHECKED"])
                     conn.execute(f'CREATE TABLE IF NOT EXISTS "{table_name}" ({column_defs})')
