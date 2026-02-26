@@ -214,6 +214,7 @@ TEILENUMMER_TAUSCH_EXTRA_COLUMNS = [
     "IN_STATUS",
 ]
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+DB_PATH.touch(exist_ok=True)
 API_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 DRYRUN_TRACE_PATH.parent.mkdir(parents=True, exist_ok=True)
 DEFAULT_SCHEME = os.getenv("SPAREPART_SCHEME", "datalake")
@@ -312,6 +313,10 @@ TEILENUMMER_RELOAD_TIMEOUT_SEC = max(
 COMPASS_PRECHECK_TIMEOUT_SEC = max(
     5,
     int(os.getenv("COMPASS_PRECHECK_TIMEOUT_SEC", "20") or 20),
+)
+JOB_STALE_MARGIN_SEC = max(
+    30,
+    int(os.getenv("MFDAPPS_JOB_STALE_MARGIN_SEC", "120") or 120),
 )
 _jobs_lock = threading.Lock()
 _jobs: Dict[str, Dict[str, Any]] = {}
@@ -548,10 +553,9 @@ def _init_goldenview_db(conn: sqlite3.Connection) -> None:
 
 @contextmanager
 def _connect(timeout: float = 30.0, busy_timeout_ms: int = 30000):
-    if not DB_PATH.exists():
-        raise HTTPException(status_code=500, detail=f"SQLite DB nicht gefunden: {DB_PATH}")
     db_path = Path(DB_PATH)
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.touch(exist_ok=True)
     last_error: sqlite3.OperationalError | None = None
     conn: sqlite3.Connection | None = None
     for attempt in range(6):
@@ -4541,12 +4545,25 @@ def _create_job(job_type: str, env: str) -> Dict[str, Any]:
 def _find_running_job(job_type: str, env: str) -> Dict[str, Any] | None:
     normalized_env = _normalize_env(env)
     with _jobs_lock:
+        now = datetime.utcnow()
         for job in _jobs.values():
             if (
                 job.get("type") == job_type
                 and job.get("env") == normalized_env
                 and job.get("status") == "running"
             ):
+                started_raw = str(job.get("started") or "")
+                stale_limit = TEILENUMMER_RELOAD_TIMEOUT_SEC + JOB_STALE_MARGIN_SEC
+                if started_raw:
+                    try:
+                        started_at = datetime.fromisoformat(started_raw)
+                        if (now - started_at).total_seconds() > stale_limit:
+                            job["status"] = "error"
+                            job["error"] = "Job stale (Timeout überschritten)."
+                            job["finished"] = now.isoformat()
+                            continue
+                    except Exception:
+                        pass
                 return dict(job)
     return None
 
@@ -4838,7 +4855,8 @@ def _finalize_teilenummer_reload(job_id: str, env: str) -> Dict[str, Any]:
 
 def _prepare_teilenummer_work_db(env: str) -> Path:
     normalized = _normalize_env(env)
-    work_dir = DB_PATH.parent
+    tmp_root = Path(os.getenv("MFDAPPS_TMP_ROOT", "/tmp")).expanduser()
+    work_dir = tmp_root / "mfdapps-reload"
     work_dir.mkdir(parents=True, exist_ok=True)
     now = time.time()
     for stale in work_dir.glob(f"{DB_PATH.stem}_reload_{normalized}_*.db"):
