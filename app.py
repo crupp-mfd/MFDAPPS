@@ -176,7 +176,7 @@ def _ensure_rsrd_backend() -> None:
             runtime_root = REPO_ROOT / "apps" / "christian" / "data"
     runtime_root = runtime_root.resolve()
     runtime_root.mkdir(parents=True, exist_ok=True)
-    sqlite_path = runtime_root / "cache.db"
+    sqlite_path = runtime_root / "cache_main.db"
     sqlite_path.touch(exist_ok=True)
 
     env = os.environ.copy()
