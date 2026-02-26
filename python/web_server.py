@@ -4885,25 +4885,39 @@ def _finalize_teilenummer_reload_work(job_id: str, env: str, work_db: Path) -> D
         ]
         if not source_columns:
             raise RuntimeError(f"Reload-Tabelle {table_name} fehlt in Arbeitsdatenbank.")
-    with _connect(timeout=30.0, busy_timeout_ms=30000) as conn:
-        if not _table_exists(conn, table_name):
-            column_defs = ", ".join(f'"{col}" TEXT' for col in source_columns + ["CHECKED"])
-            conn.execute(f'CREATE TABLE IF NOT EXISTS "{table_name}" ({column_defs})')
-        _ensure_columns(conn, table_name, source_columns + ["CHECKED"])
-        work_db_sql = str(work_db).replace("'", "''")
-        conn.execute(f"ATTACH DATABASE '{work_db_sql}' AS workdb")
+    count_rows = 0
+    merge_attempts = 20
+    for attempt in range(merge_attempts):
         try:
-            column_list = ", ".join(f'"{col}"' for col in source_columns)
-            conn.execute(f'DELETE FROM "{table_name}"')
-            conn.execute(
-                f'INSERT INTO "{table_name}" ({column_list}) '
-                f'SELECT {column_list} FROM workdb."{table_name}"'
+            with _connect(timeout=30.0, busy_timeout_ms=30000) as conn:
+                if not _table_exists(conn, table_name):
+                    column_defs = ", ".join(f'"{col}" TEXT' for col in source_columns + ["CHECKED"])
+                    conn.execute(f'CREATE TABLE IF NOT EXISTS "{table_name}" ({column_defs})')
+                _ensure_columns(conn, table_name, source_columns + ["CHECKED"])
+                work_db_sql = str(work_db).replace("'", "''")
+                conn.execute(f"ATTACH DATABASE '{work_db_sql}' AS workdb")
+                try:
+                    column_list = ", ".join(f'"{col}"' for col in source_columns)
+                    conn.execute(f'DELETE FROM "{table_name}"')
+                    conn.execute(
+                        f'INSERT INTO "{table_name}" ({column_list}) '
+                        f'SELECT {column_list} FROM workdb."{table_name}"'
+                    )
+                finally:
+                    conn.execute("DETACH DATABASE workdb")
+                conn.execute(f'UPDATE "{table_name}" SET "CHECKED" = ""')
+                count_rows = int(conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0] or 0)
+                conn.commit()
+            break
+        except sqlite3.OperationalError as exc:
+            if not _is_sqlite_locked_error(exc) or attempt >= (merge_attempts - 1):
+                raise
+            wait_sec = 0.25 * (attempt + 1)
+            _append_job_log(
+                job_id,
+                f"SQLite lock beim Merge ({attempt + 1}/{merge_attempts}) – retry in {wait_sec:.2f}s ...",
             )
-        finally:
-            conn.execute("DETACH DATABASE workdb")
-        conn.execute(f'UPDATE "{table_name}" SET "CHECKED" = ""')
-        count_rows = int(conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0] or 0)
-        conn.commit()
+            time.sleep(wait_sec)
     for suffix in ("", "-wal", "-shm"):
         try:
             Path(f"{work_db}{suffix}").unlink(missing_ok=True)
