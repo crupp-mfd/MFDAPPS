@@ -64,6 +64,11 @@ except Exception:
             try:
                 conn = sqlite3.connect(str(db_path), timeout=30)
                 conn.row_factory = sqlite3.Row
+                try:
+                    conn.execute("PRAGMA journal_mode = WAL")
+                    conn.execute("PRAGMA synchronous = NORMAL")
+                except sqlite3.OperationalError:
+                    pass
                 conn.execute("PRAGMA busy_timeout = 30000")
                 return conn
             except sqlite3.OperationalError as exc:
@@ -564,6 +569,11 @@ def _connect(timeout: float = 30.0, busy_timeout_ms: int = 30000):
             try:
                 conn = sqlite3.connect(str(db_path), timeout=timeout)
                 conn.row_factory = sqlite3.Row
+                try:
+                    conn.execute("PRAGMA journal_mode = WAL")
+                    conn.execute("PRAGMA synchronous = NORMAL")
+                except sqlite3.OperationalError:
+                    pass
                 conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
                 break
             except sqlite3.OperationalError as exc:
