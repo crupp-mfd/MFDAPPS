@@ -4450,6 +4450,33 @@ def _build_erp_full_cmd(env: str) -> List[str]:
     ]
 
 
+def _build_teilenummer_reload_cmd(env: str) -> List[str]:
+    sql_file = _teilenummer_sql_file(env)
+    if not sql_file.exists():
+        raise FileNotFoundError(f"SQL-Datei nicht gefunden: {sql_file}")
+    ionapi = _ionapi_path(env, "compass")
+    table_name = _table_for(TEILENUMMER_TABLE, env)
+    cmd = [
+        sys.executable,
+        str(PROJECT_ROOT / "python" / "compass_to_sqlite.py"),
+        "--scheme",
+        DEFAULT_SCHEME,
+        "--sql-file",
+        str(sql_file),
+        "--table",
+        table_name,
+        "--sqlite-db",
+        str(DB_PATH),
+        "--mode",
+        "replace",
+        "--ionapi",
+        str(ionapi),
+    ]
+    if _normalize_env(env) == "tst" and TST_COMPASS_JDBC.exists():
+        cmd.extend(["--jdbc-jar", str(TST_COMPASS_JDBC)])
+    return cmd
+
+
 def _create_job(job_type: str, env: str) -> Dict[str, Any]:
     job_id = uuid.uuid4().hex
     job = {
@@ -4655,7 +4682,8 @@ def _start_subprocess_job(
         try:
             for line in process.stdout:
                 text = line.strip()
-                if not text or PROGRESS_LINE.match(text):
+                keep_progress_lines = job_type in {"reload_teilenummer"}
+                if not text or (PROGRESS_LINE.match(text) and not keep_progress_lines):
                     continue
                 _append_job_log(job["id"], text)
             returncode = process.wait()
@@ -4695,6 +4723,18 @@ def _finalize_load_erp_full(job_id: str, env: str) -> Dict[str, Any]:
     message = f"ERP-Wagenattribute geladen: {count_full}."
     _append_job_log(job_id, message)
     return {"count_full": count_full}
+
+
+def _finalize_teilenummer_reload(job_id: str, env: str) -> Dict[str, Any]:
+    table_name = _table_for(TEILENUMMER_TABLE, env)
+    with _connect() as conn:
+        _ensure_columns(conn, table_name, ["CHECKED"])
+        conn.execute(f'UPDATE "{table_name}" SET "CHECKED" = ""')
+        count_rows = int(conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0] or 0)
+        conn.commit()
+    _record_cache_status(TEILENUMMER_TABLE, env, "manual_reload", row_count=count_rows)
+    _append_job_log(job_id, f"Reload abgeschlossen: {count_rows} Datensätze.")
+    return {"rows": count_rows}
 
 
 def _reload_spareparts_table(env: str) -> None:
@@ -4754,6 +4794,17 @@ def reload_teilenummer(env: str = Query(DEFAULT_ENV)) -> dict:
         conn.commit()
     _record_cache_status(TEILENUMMER_TABLE, env, "manual_reload")
     return {"message": "Reload erfolgreich", "stdout": result.stdout, "env": _normalize_env(env)}
+
+
+@app.post("/api/teilenummer/reload_job")
+def reload_teilenummer_job(env: str = Query(DEFAULT_ENV)) -> dict:
+    job = _start_subprocess_job(
+        "reload_teilenummer",
+        _build_teilenummer_reload_cmd(env),
+        env,
+        lambda job_id: _finalize_teilenummer_reload(job_id, env),
+    )
+    return {"job_id": job["id"], "status": job["status"], "env": job["env"]}
 
 
 @app.post("/api/wagensuche/reload")

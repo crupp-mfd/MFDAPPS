@@ -462,7 +462,8 @@ const WAGON_MODULES = {
   teilenummer: {
     table: "TEILENUMMER",
     metaKey: "teilenummer",
-    reloadUrl: "/api/teilenummer/reload",
+    reloadUrl: "/api/teilenummer/reload_job",
+    reloadJob: true,
     reloadOnStart: false,
     includeSpareparts: false,
   },
@@ -1282,7 +1283,48 @@ const reloadWagonTable = async (config) => {
     const text = await resp.text();
     throw new Error(text || "Reload fehlgeschlagen");
   }
-  return resp;
+  const data = await resp.json().catch(() => ({}));
+  if (config.reloadJob) {
+    const jobId = data?.job_id;
+    if (!jobId) {
+      throw new Error("Reload-Job konnte nicht gestartet werden (keine Job-ID).");
+    }
+    let offset = 0;
+    while (true) {
+      const jobResp = await fetch(withEnv(`/api/rsrd2/jobs/${encodeURIComponent(jobId)}`));
+      if (!jobResp.ok) {
+        const text = await parseErrorResponse(jobResp);
+        throw new Error(text || "Reload-Status konnte nicht geladen werden.");
+      }
+      const job = await jobResp.json();
+      const logs = Array.isArray(job.logs) ? job.logs : [];
+      for (let idx = offset; idx < logs.length; idx += 1) {
+        const line = String(logs[idx] || "").trim();
+        if (!line) continue;
+        setStatus(line);
+        const match = line.match(/^(\d+)\/(\d+)\s+Datensätze gespeichert/i);
+        if (match) {
+          const done = Number.parseInt(match[1], 10) || 0;
+          const total = Number.parseInt(match[2], 10) || 0;
+          updateProgress(done, total);
+        }
+      }
+      offset = logs.length;
+      if (job.status === "running") {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        continue;
+      }
+      if (job.status !== "success") {
+        throw new Error(job.error || "Reload fehlgeschlagen.");
+      }
+      const total = Number.parseInt(job?.result?.rows, 10);
+      if (Number.isFinite(total) && total > 0) {
+        updateProgress(total, total);
+      }
+      break;
+    }
+  }
+  return data;
 };
 
 const startModuleWorkflow = async ({ skipReload = false } = {}) => {
