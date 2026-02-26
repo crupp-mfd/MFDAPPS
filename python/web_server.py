@@ -4492,12 +4492,13 @@ def _build_erp_full_cmd(env: str) -> List[str]:
     ]
 
 
-def _build_teilenummer_reload_cmd(env: str) -> List[str]:
+def _build_teilenummer_reload_cmd(env: str, sqlite_db_path: Path | None = None) -> List[str]:
     sql_file = _teilenummer_sql_file(env)
     if not sql_file.exists():
         raise FileNotFoundError(f"SQL-Datei nicht gefunden: {sql_file}")
     ionapi = _ionapi_path(env, "compass")
     table_name = _table_for(TEILENUMMER_TABLE, env)
+    target_db = sqlite_db_path or DB_PATH
     cmd = [
         sys.executable,
         str(PROJECT_ROOT / "python" / "compass_to_sqlite.py"),
@@ -4508,7 +4509,7 @@ def _build_teilenummer_reload_cmd(env: str) -> List[str]:
         "--table",
         table_name,
         "--sqlite-db",
-        str(DB_PATH),
+        str(target_db),
         "--mode",
         "truncate",
         "--ionapi",
@@ -4810,6 +4811,30 @@ def _finalize_teilenummer_reload(job_id: str, env: str) -> Dict[str, Any]:
     return {"rows": count_rows}
 
 
+def _prepare_teilenummer_work_db(env: str) -> Path:
+    normalized = _normalize_env(env)
+    work_db = DB_PATH.parent / f"{DB_PATH.stem}_reload_{normalized}.db"
+    if work_db.exists():
+        work_db.unlink()
+    shutil.copy2(DB_PATH, work_db)
+    return work_db
+
+
+def _finalize_teilenummer_reload_work(job_id: str, env: str, work_db: Path) -> Dict[str, Any]:
+    table_name = _table_for(TEILENUMMER_TABLE, env)
+    with sqlite3.connect(str(work_db), timeout=30) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 30000")
+        _ensure_columns(conn, table_name, ["CHECKED"])
+        conn.execute(f'UPDATE "{table_name}" SET "CHECKED" = ""')
+        count_rows = int(conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0] or 0)
+        conn.commit()
+    os.replace(str(work_db), str(DB_PATH))
+    _record_cache_status(TEILENUMMER_TABLE, env, "manual_reload", row_count=count_rows)
+    _append_job_log(job_id, f"Reload abgeschlossen: {count_rows} Datensätze.")
+    return {"rows": count_rows}
+
+
 def _reload_spareparts_table(env: str) -> None:
     if not SPAREPARTS_SQL_FILE.exists():
         return
@@ -4887,15 +4912,16 @@ def reload_teilenummer(env: str = Query(DEFAULT_ENV)) -> dict:
 @app.post("/api/teilenummer/reload_job")
 def reload_teilenummer_job(env: str = Query(DEFAULT_ENV)) -> dict:
     _precheck_compass_connection(env)
+    work_db = _prepare_teilenummer_work_db(env)
     try:
-        cmd = _build_teilenummer_reload_cmd(env)
+        cmd = _build_teilenummer_reload_cmd(env, sqlite_db_path=work_db)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     job = _start_subprocess_job(
         "reload_teilenummer",
         cmd,
         env,
-        lambda job_id: _finalize_teilenummer_reload(job_id, env),
+        lambda job_id: _finalize_teilenummer_reload_work(job_id, env, work_db),
         max_runtime_sec=TEILENUMMER_RELOAD_TIMEOUT_SEC,
     )
     return {"job_id": job["id"], "status": job["status"], "env": job["env"]}
