@@ -64,11 +64,6 @@ except Exception:
             try:
                 conn = sqlite3.connect(str(db_path), timeout=30)
                 conn.row_factory = sqlite3.Row
-                try:
-                    conn.execute("PRAGMA journal_mode = WAL")
-                    conn.execute("PRAGMA synchronous = NORMAL")
-                except sqlite3.OperationalError:
-                    pass
                 conn.execute("PRAGMA busy_timeout = 30000")
                 return conn
             except sqlite3.OperationalError as exc:
@@ -222,6 +217,20 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 DB_PATH.touch(exist_ok=True)
 API_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 DRYRUN_TRACE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _init_sqlite_runtime() -> None:
+    try:
+        with sqlite3.connect(str(DB_PATH), timeout=10) as conn:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA synchronous = NORMAL")
+            conn.execute("PRAGMA busy_timeout = 30000")
+    except sqlite3.OperationalError:
+        pass
+
+
+_init_sqlite_runtime()
+
 DEFAULT_SCHEME = os.getenv("SPAREPART_SCHEME", "datalake")
 DEFAULT_CATALOG = os.getenv("SPAREPART_CATALOG")
 DEFAULT_COLLECTION = os.getenv("SPAREPART_DEFAULT_COLLECTION")
@@ -567,11 +576,6 @@ def _connect(timeout: float = 30.0, busy_timeout_ms: int = 30000):
         try:
             conn = sqlite3.connect(str(db_path), timeout=timeout)
             conn.row_factory = sqlite3.Row
-            try:
-                conn.execute("PRAGMA journal_mode = WAL")
-                conn.execute("PRAGMA synchronous = NORMAL")
-            except sqlite3.OperationalError:
-                pass
             conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
             break
         except sqlite3.OperationalError as exc:
