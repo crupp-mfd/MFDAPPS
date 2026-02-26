@@ -238,17 +238,21 @@ def _ensure_sqlite_wal_ready(max_attempts: int = 20) -> str:
         try:
             with sqlite3.connect(str(DB_PATH), timeout=1, isolation_level=None) as conn:
                 conn.execute("PRAGMA busy_timeout = 1000")
+                current_row = conn.execute("PRAGMA journal_mode").fetchone()
+                current_mode = str(current_row[0] if current_row else "").lower()
+                if current_mode == "wal":
+                    return "wal"
                 row = conn.execute("PRAGMA journal_mode = WAL").fetchone()
                 mode = str(row[0] if row else "").lower()
-                return mode or "unknown"
+                return mode or (current_mode or "unknown")
         except sqlite3.OperationalError as exc:
             last_error = exc
             if not _is_sqlite_locked_error(exc) and "busy" not in str(exc).lower():
                 raise
             time.sleep(0.2 + (0.1 * attempt))
     if last_error is not None:
-        raise RuntimeError(f"SQLite ist blockiert: {last_error}")
-    return "unknown"
+        return f"locked ({last_error})"
+    return "locked"
 
 DEFAULT_SCHEME = os.getenv("SPAREPART_SCHEME", "datalake")
 DEFAULT_CATALOG = os.getenv("SPAREPART_CATALOG")
