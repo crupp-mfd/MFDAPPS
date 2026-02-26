@@ -345,7 +345,7 @@ JOB_LOG_LIMIT = 2000
 PROGRESS_LINE = re.compile(r"^\d+/\d+\s+Datensätze gespeichert \.\.\.$")
 TEILENUMMER_RELOAD_TIMEOUT_SEC = max(
     60,
-    int(os.getenv("TEILENUMMER_RELOAD_TIMEOUT_SEC", "180") or 180),
+    int(os.getenv("TEILENUMMER_RELOAD_TIMEOUT_SEC", "600") or 600),
 )
 COMPASS_PRECHECK_TIMEOUT_SEC = max(
     5,
@@ -5074,12 +5074,7 @@ def reload_teilenummer_job(env: str = Query(DEFAULT_ENV)) -> dict:
         _append_job_log(job_id, "SQLite wird vorbereitet ...")
         wal_mode = _ensure_sqlite_wal_ready()
         _append_job_log(job_id, f"SQLite journal_mode: {wal_mode}")
-        _append_job_log(job_id, "Arbeitsdatenbank wird vorbereitet ...")
-        work_db = _prepare_teilenummer_work_db(env)
-        _append_job_log(job_id, f"Arbeitsdatenbank: {work_db.name}")
-        cmd_local = _build_teilenummer_reload_cmd(env, sqlite_db_path=work_db)
-        finalize_local = lambda inner_job_id: _finalize_teilenummer_reload_work(inner_job_id, env, work_db)
-        return cmd_local, finalize_local
+        _append_job_log(job_id, "Reload wird direkt auf SQLite ausgeführt ...")
 
     try:
         cmd = _build_teilenummer_reload_cmd(env, sqlite_db_path=DB_PATH)
