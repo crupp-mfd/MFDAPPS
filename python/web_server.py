@@ -5027,24 +5027,34 @@ def _finalize_teilenummer_reload_work(job_id: str, env: str, work_db: Path) -> D
 
             for attempt in range(merge_attempts):
                 try:
-                    with sqlite3.connect(str(swap_db), timeout=5.0, isolation_level=None) as conn:
+                    with (
+                        sqlite3.connect(str(swap_db), timeout=5.0, isolation_level=None) as conn,
+                        sqlite3.connect(str(work_db), timeout=5.0) as work_conn,
+                    ):
                         conn.row_factory = sqlite3.Row
                         conn.execute("PRAGMA busy_timeout = 5000")
+                        work_conn.row_factory = sqlite3.Row
+                        work_conn.execute("PRAGMA busy_timeout = 5000")
                         if not _table_exists(conn, table_name):
                             column_defs = ", ".join(f'"{col}" TEXT' for col in source_columns + ["CHECKED"])
                             conn.execute(f'CREATE TABLE IF NOT EXISTS "{table_name}" ({column_defs})')
                         _ensure_columns(conn, table_name, source_columns + ["CHECKED"])
-                        work_db_sql = str(work_db).replace("'", "''")
-                        conn.execute(f"ATTACH DATABASE '{work_db_sql}' AS workdb")
-                        try:
-                            column_list = ", ".join(f'"{col}"' for col in source_columns)
-                            conn.execute(f'DELETE FROM "{table_name}"')
-                            conn.execute(
-                                f'INSERT INTO "{table_name}" ({column_list}) '
-                                f'SELECT {column_list} FROM workdb."{table_name}"'
-                            )
-                        finally:
-                            conn.execute("DETACH DATABASE workdb")
+
+                        column_list = ", ".join(f'"{col}"' for col in source_columns)
+                        placeholders = ", ".join("?" for _ in source_columns)
+                        insert_sql = f'INSERT INTO "{table_name}" ({column_list}) VALUES ({placeholders})'
+
+                        conn.execute("BEGIN IMMEDIATE")
+                        conn.execute(f'DELETE FROM "{table_name}"')
+                        cursor = work_conn.execute(f'SELECT {column_list} FROM "{table_name}"')
+                        batch: list[tuple[Any, ...]] = []
+                        for row in cursor:
+                            batch.append(tuple(row[col] for col in source_columns))
+                            if len(batch) >= 2000:
+                                conn.executemany(insert_sql, batch)
+                                batch.clear()
+                        if batch:
+                            conn.executemany(insert_sql, batch)
                         conn.execute(f'UPDATE "{table_name}" SET "CHECKED" = ""')
                         count_rows = int(conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0] or 0)
                         conn.commit()
