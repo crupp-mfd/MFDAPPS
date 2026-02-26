@@ -136,6 +136,16 @@ def _resolve_runtime_path(value: str | None, default_name: str) -> Path:
 
 
 DB_PATH = _resolve_runtime_path(os.getenv("SQLITE_PATH"), "cache.db")
+_sqlite_backup_raw = (os.getenv("SQLITE_BACKUP_PATH") or "").strip()
+SQLITE_BACKUP_PATH = (
+    (_resolve_runtime_path(_sqlite_backup_raw, "cache.db") if _sqlite_backup_raw else None)
+)
+if SQLITE_BACKUP_PATH is not None and SQLITE_BACKUP_PATH.resolve() == DB_PATH.resolve():
+    SQLITE_BACKUP_PATH = None
+SQLITE_BACKUP_SYNC_INTERVAL_SEC = max(
+    1,
+    int((os.getenv("SQLITE_BACKUP_SYNC_INTERVAL_SEC") or "8").strip() or 8),
+)
 API_LOG_PATH = _resolve_runtime_path(os.getenv("API_LOG_PATH"), "API.log")
 DRYRUN_TRACE_PATH = _resolve_runtime_path(os.getenv("DRYRUN_TRACE_PATH"), "dryrun_api_calls.txt")
 _SQLITE_JOURNAL_MODES = {"DELETE", "WAL", "TRUNCATE", "PERSIST", "MEMORY", "OFF"}
@@ -220,8 +230,49 @@ TEILENUMMER_TAUSCH_EXTRA_COLUMNS = [
 ]
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 DB_PATH.touch(exist_ok=True)
+if SQLITE_BACKUP_PATH is not None:
+    SQLITE_BACKUP_PATH.parent.mkdir(parents=True, exist_ok=True)
 API_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 DRYRUN_TRACE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _restore_sqlite_from_backup() -> None:
+    if SQLITE_BACKUP_PATH is None or not SQLITE_BACKUP_PATH.exists():
+        return
+    try:
+        if DB_PATH.exists() and DB_PATH.stat().st_size > 0:
+            return
+    except OSError:
+        pass
+    try:
+        shutil.copy2(SQLITE_BACKUP_PATH, DB_PATH)
+    except Exception:
+        pass
+
+
+def _sync_sqlite_backup(force: bool = False) -> None:
+    if SQLITE_BACKUP_PATH is None:
+        return
+    if not DB_PATH.exists():
+        return
+    global _sqlite_backup_last_sync
+    now = time.time()
+    with _sqlite_backup_lock:
+        if (not force) and (now - _sqlite_backup_last_sync) < SQLITE_BACKUP_SYNC_INTERVAL_SEC:
+            return
+        tmp_backup = SQLITE_BACKUP_PATH.parent / f".{SQLITE_BACKUP_PATH.name}.{uuid.uuid4().hex}.tmp"
+        try:
+            shutil.copy2(DB_PATH, tmp_backup)
+            os.replace(tmp_backup, SQLITE_BACKUP_PATH)
+            _sqlite_backup_last_sync = now
+        finally:
+            try:
+                tmp_backup.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+_restore_sqlite_from_backup()
 
 
 def _init_sqlite_runtime() -> None:
@@ -366,6 +417,8 @@ _jobs: Dict[str, Dict[str, Any]] = {}
 _dryrun_trace_lock = threading.Lock()
 _dryrun_trace_seq = 0
 _sqlite_conn_lock = threading.RLock()
+_sqlite_backup_lock = threading.Lock()
+_sqlite_backup_last_sync = 0.0
 _reload_merge_state_lock = threading.Lock()
 _reload_merge_thread_id: int | None = None
 DATALAKE_SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9_]+$")
@@ -633,10 +686,17 @@ def _connect(timeout: float = 30.0, busy_timeout_ms: int = 30000):
         try:
             yield conn
         finally:
+            had_changes = False
+            try:
+                had_changes = int(getattr(conn, "total_changes", 0) or 0) > 0
+            except Exception:
+                had_changes = False
             try:
                 conn.close()
             except Exception:
                 pass
+            if had_changes:
+                _sync_sqlite_backup()
 
 
 def _ensure_swap_table(conn: sqlite3.Connection, table_name: str) -> None:
@@ -5071,6 +5131,7 @@ def _finalize_teilenummer_reload_work(job_id: str, env: str, work_db: Path) -> D
 
             os.replace(swap_db, db_path)
             _append_job_log(job_id, "SQLite-Merge abgeschlossen, DB-Datei wurde atomar ersetzt.")
+            _sync_sqlite_backup(force=True)
             for suffix in ("-wal", "-shm"):
                 try:
                     Path(f"{db_path}{suffix}").unlink(missing_ok=True)

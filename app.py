@@ -14,6 +14,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import shutil
 import threading
 from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
@@ -261,17 +262,29 @@ def _ensure_backend(spec: dict[str, str | int]) -> None:
     if not python_bin:
         python_bin = str(preferred_python if preferred_python.exists() else Path(sys.executable))
 
-    runtime_root = _resolve_runtime_root()
-    sqlite_dir = runtime_root / "sqlite"
+    persistent_runtime_root = _resolve_runtime_root()
+    local_runtime_raw = os.environ.get("MFDAPPS_LOCAL_RUNTIME_ROOT", "/tmp/mfdapps-runtime").strip()
+    local_runtime_root = Path(local_runtime_raw).expanduser().resolve()
+    local_runtime_root.mkdir(parents=True, exist_ok=True)
+    sqlite_dir = local_runtime_root / "sqlite"
     sqlite_dir.mkdir(parents=True, exist_ok=True)
+    sqlite_backup_dir = persistent_runtime_root / "sqlite"
+    sqlite_backup_dir.mkdir(parents=True, exist_ok=True)
     sqlite_path = sqlite_dir / str(spec["sqlite_file"])
+    sqlite_backup_path = sqlite_backup_dir / str(spec["sqlite_file"])
+    if (not sqlite_path.exists()) and sqlite_backup_path.exists():
+        try:
+            shutil.copy2(sqlite_backup_path, sqlite_path)
+        except Exception:
+            pass
     sqlite_path.touch(exist_ok=True)
 
     env = os.environ.copy()
     env["MFDAPPS_ENFORCE_ONEDRIVE"] = "0"
     env["MFDAPPS_HOME"] = str(REPO_ROOT)
-    env["MFDAPPS_RUNTIME_ROOT"] = str(runtime_root)
+    env["MFDAPPS_RUNTIME_ROOT"] = str(local_runtime_root)
     env["SQLITE_PATH"] = str(sqlite_path)
+    env["SQLITE_BACKUP_PATH"] = str(sqlite_backup_path)
     env["MFDAPPS_CREDENTIALS_DIR"] = str(REPO_ROOT / "credentials")
     env["MFDAPPS_FRONTEND_DIR"] = str(REPO_ROOT / "apps" / "christian" / "AppRSRD" / "frontend")
     env["PYTHONPATH"] = (
