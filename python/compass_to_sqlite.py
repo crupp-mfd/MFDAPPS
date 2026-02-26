@@ -206,7 +206,11 @@ def main() -> None:
     ion_cfg = load_ionapi(ionapi_path)
     jdbc_url = build_jdbc_url(ion_cfg, args.scheme, args.catalog)
     props = build_properties(ion_cfg, args.catalog, args.default_collection)
+    print("Compass-Verbindung wird aufgebaut ...", flush=True)
+    query_started = time.time()
     query_result = run_query(jdbc_url, jdbc_path, props, sql)
+    query_elapsed = time.time() - query_started
+    print(f"Compass-Query abgeschlossen in {query_elapsed:.1f}s.", flush=True)
 
     columns = query_result["columns"]
     rows = query_result["rows"]
@@ -219,7 +223,9 @@ def main() -> None:
     conn = sqlite3.connect(str(db_path), timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     try:
+        print(f"SQLite-Tabelle wird vorbereitet: {args.table}", flush=True)
         ensure_table(conn, args.table, columns, "replace" if args.mode == "replace" else "append")
+        print("SQLite-Schreiben gestartet ...", flush=True)
         inserted = insert_rows(conn, args.table, columns, rows, args.mode)
         _execute_sql_with_retry(conn, "PRAGMA optimize")
         conn.commit()

@@ -308,6 +308,10 @@ TEILENUMMER_RELOAD_TIMEOUT_SEC = max(
     60,
     int(os.getenv("TEILENUMMER_RELOAD_TIMEOUT_SEC", "180") or 180),
 )
+COMPASS_PRECHECK_TIMEOUT_SEC = max(
+    5,
+    int(os.getenv("COMPASS_PRECHECK_TIMEOUT_SEC", "20") or 20),
+)
 _jobs_lock = threading.Lock()
 _jobs: Dict[str, Dict[str, Any]] = {}
 _dryrun_trace_lock = threading.Lock()
@@ -2985,6 +2989,22 @@ def _run_compass_query(sql: str, env: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+def _precheck_compass_connection(env: str, timeout_seconds: int = COMPASS_PRECHECK_TIMEOUT_SEC) -> None:
+    probe_sql = "SELECT 1 AS PING"
+    try:
+        _run_compass_query_internal(probe_sql, env, timeout_seconds=timeout_seconds)
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Compass-Verbindungsprüfung Timeout nach {timeout_seconds}s.",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Compass-Verbindungsprüfung fehlgeschlagen: {exc}",
+        ) from exc
+
+
 def _datalake_env_label(normalized_env: str) -> str:
     return "live" if normalized_env == "prd" else "tst"
 
@@ -4822,6 +4842,7 @@ def reload_teilenummer(env: str = Query(DEFAULT_ENV)) -> dict:
     sql_file = _teilenummer_sql_file(env)
     if not sql_file.exists():
         raise HTTPException(status_code=500, detail=f"SQL-Datei nicht gefunden: {sql_file}")
+    _precheck_compass_connection(env)
     table_name = _table_for(TEILENUMMER_TABLE, env)
     try:
         result = _run_compass_to_sqlite(
@@ -4852,6 +4873,7 @@ def reload_teilenummer(env: str = Query(DEFAULT_ENV)) -> dict:
 
 @app.post("/api/teilenummer/reload_job")
 def reload_teilenummer_job(env: str = Query(DEFAULT_ENV)) -> dict:
+    _precheck_compass_connection(env)
     try:
         cmd = _build_teilenummer_reload_cmd(env)
     except FileNotFoundError as exc:

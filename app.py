@@ -1299,7 +1299,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         query = parse_qs(parsed.query)
         path = parsed.path
 
-        if path == "/apps/christian/AppRSRD" or path.startswith("/apps/christian/AppRSRD/"):
+        if path in {"/apps/christian/AppRSRD", "/apps/christian/AppRSRD/"}:
             self.send_response(302)
             self.send_header("Location", "/apps/christian/AppRSRD/frontend/rsrd2.html")
             self.end_headers()
