@@ -4538,6 +4538,19 @@ def _create_job(job_type: str, env: str) -> Dict[str, Any]:
     return job
 
 
+def _find_running_job(job_type: str, env: str) -> Dict[str, Any] | None:
+    normalized_env = _normalize_env(env)
+    with _jobs_lock:
+        for job in _jobs.values():
+            if (
+                job.get("type") == job_type
+                and job.get("env") == normalized_env
+                and job.get("status") == "running"
+            ):
+                return dict(job)
+    return None
+
+
 def _append_job_log(job_id: str, message: str) -> None:
     if not message:
         return
@@ -4813,10 +4826,25 @@ def _finalize_teilenummer_reload(job_id: str, env: str) -> Dict[str, Any]:
 
 def _prepare_teilenummer_work_db(env: str) -> Path:
     normalized = _normalize_env(env)
-    work_db = DB_PATH.parent / f"{DB_PATH.stem}_reload_{normalized}.db"
+    if not DB_PATH.exists():
+        raise HTTPException(status_code=500, detail=f"SQLite DB nicht gefunden: {DB_PATH}")
+    work_dir = DB_PATH.parent
+    work_dir.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    for stale in work_dir.glob(f"{DB_PATH.stem}_reload_{normalized}_*.db"):
+        try:
+            if now - stale.stat().st_mtime > 12 * 3600:
+                stale.unlink()
+        except OSError:
+            continue
+    work_db = work_dir / f"{DB_PATH.stem}_reload_{normalized}_{uuid.uuid4().hex[:8]}.db"
     if work_db.exists():
         work_db.unlink()
-    shutil.copy2(DB_PATH, work_db)
+    with sqlite3.connect(str(DB_PATH), timeout=30) as src_conn:
+        src_conn.execute("PRAGMA busy_timeout = 30000")
+        with sqlite3.connect(str(work_db), timeout=30) as dst_conn:
+            src_conn.backup(dst_conn)
+            dst_conn.commit()
     return work_db
 
 
@@ -4911,6 +4939,14 @@ def reload_teilenummer(env: str = Query(DEFAULT_ENV)) -> dict:
 
 @app.post("/api/teilenummer/reload_job")
 def reload_teilenummer_job(env: str = Query(DEFAULT_ENV)) -> dict:
+    existing = _find_running_job("reload_teilenummer", env)
+    if existing is not None:
+        return {
+            "job_id": existing["id"],
+            "status": "running",
+            "env": existing.get("env") or _normalize_env(env),
+            "reused": True,
+        }
     _precheck_compass_connection(env)
     work_db = _prepare_teilenummer_work_db(env)
     try:
@@ -4924,6 +4960,7 @@ def reload_teilenummer_job(env: str = Query(DEFAULT_ENV)) -> dict:
         lambda job_id: _finalize_teilenummer_reload_work(job_id, env, work_db),
         max_runtime_sec=TEILENUMMER_RELOAD_TIMEOUT_SEC,
     )
+    _append_job_log(job["id"], f"Arbeitsdatenbank: {work_db.name}")
     return {"job_id": job["id"], "status": job["status"], "env": job["env"]}
 
 

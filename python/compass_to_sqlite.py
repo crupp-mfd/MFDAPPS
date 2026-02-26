@@ -224,7 +224,9 @@ def main() -> None:
     conn.execute("PRAGMA busy_timeout = 60000")
     try:
         print(f"SQLite-Tabelle wird vorbereitet: {args.table}", flush=True)
+        print("SQLite: Tabellenstruktur prüfen ...", flush=True)
         ensure_table(conn, args.table, columns, "replace" if args.mode == "replace" else "append")
+        print("SQLite: Tabellenstruktur bereit.", flush=True)
         print("SQLite-Schreiben gestartet ...", flush=True)
         inserted = insert_rows(conn, args.table, columns, rows, args.mode)
         _execute_sql_with_retry(conn, "PRAGMA optimize")
