@@ -306,7 +306,7 @@ JOB_LOG_LIMIT = 2000
 PROGRESS_LINE = re.compile(r"^\d+/\d+\s+Datensätze gespeichert \.\.\.$")
 TEILENUMMER_RELOAD_TIMEOUT_SEC = max(
     60,
-    int(os.getenv("TEILENUMMER_RELOAD_TIMEOUT_SEC", "600") or 600),
+    int(os.getenv("TEILENUMMER_RELOAD_TIMEOUT_SEC", "180") or 180),
 )
 _jobs_lock = threading.Lock()
 _jobs: Dict[str, Dict[str, Any]] = {}

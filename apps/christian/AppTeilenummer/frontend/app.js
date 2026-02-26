@@ -1290,6 +1290,7 @@ const reloadWagonTable = async (config) => {
       throw new Error("Reload-Job konnte nicht gestartet werden (keine Job-ID).");
     }
     let offset = 0;
+    const startedAt = Date.now();
     while (true) {
       const jobResp = await fetch(withEnv(`/api/rsrd2/jobs/${encodeURIComponent(jobId)}`));
       if (!jobResp.ok) {
@@ -1298,9 +1299,11 @@ const reloadWagonTable = async (config) => {
       }
       const job = await jobResp.json();
       const logs = Array.isArray(job.logs) ? job.logs : [];
+      let hasNewLog = false;
       for (let idx = offset; idx < logs.length; idx += 1) {
         const line = String(logs[idx] || "").trim();
         if (!line) continue;
+        hasNewLog = true;
         setStatus(line);
         const match = line.match(/^(\d+)\/(\d+)\s+Datensätze gespeichert/i);
         if (match) {
@@ -1311,6 +1314,10 @@ const reloadWagonTable = async (config) => {
       }
       offset = logs.length;
       if (job.status === "running") {
+        if (!hasNewLog) {
+          const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+          setStatus(`Datenbank wird neu geladen ... (${elapsed}s)`);
+        }
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
         continue;
       }
