@@ -6,6 +6,7 @@ import errno
 import importlib.util
 import json
 import os
+import signal
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 import re
@@ -21,6 +22,8 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 REPO_ROOT = Path(__file__).resolve().parent
+LEGACY_LOCAL_RUNTIME_DIR = REPO_ROOT / "apps" / "christian" / "data"
+LEGACY_LOCAL_CACHE_DB = LEGACY_LOCAL_RUNTIME_DIR / "cache.db"
 
 
 def _load_env_file(path: Path) -> None:
@@ -54,6 +57,17 @@ def _load_local_env() -> None:
 
 
 _load_local_env()
+
+
+def _ensure_local_legacy_cache_db() -> None:
+    try:
+        LEGACY_LOCAL_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        LEGACY_LOCAL_CACHE_DB.touch(exist_ok=True)
+    except Exception:
+        pass
+
+
+_ensure_local_legacy_cache_db()
 
 
 def _resolve_mehr_root() -> Path:
@@ -251,11 +265,57 @@ def _backend_spec_for_path(path: str) -> dict[str, str | int] | None:
     return None
 
 
+def _probe_backend_sqlite_path(spec: dict[str, str | int], timeout: float = 1.2) -> str:
+    try:
+        req = Request(_backend_url(spec, "/api/rsrd2/sqlite_locks", ""), method="GET")
+        with urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+            if isinstance(payload, dict):
+                db_path = payload.get("db_path")
+                if isinstance(db_path, str):
+                    return db_path
+    except Exception:
+        return ""
+    return ""
+
+
+def _terminate_listener_on_port(port: int) -> None:
+    try:
+        proc = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return
+    pids = []
+    for raw in (proc.stdout or "").splitlines():
+        value = raw.strip()
+        if value.isdigit():
+            pids.append(int(value))
+    if not pids:
+        return
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception:
+            pass
+    time.sleep(0.3)
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+        except Exception:
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:
+            pass
+
+
 def _ensure_backend(spec: dict[str, str | int]) -> None:
     backend_host = str(spec["host"])
     backend_port = int(spec["port"])
-    if _is_tcp_reachable(backend_host, backend_port):
-        return
 
     preferred_python = Path("/Users/crupp/SPAREPART/.venv/bin/python")
     python_bin = os.environ.get("MFDAPPS_RSRD_PYTHON")
@@ -263,7 +323,12 @@ def _ensure_backend(spec: dict[str, str | int]) -> None:
         python_bin = str(preferred_python if preferred_python.exists() else Path(sys.executable))
 
     persistent_runtime_root = _resolve_runtime_root()
-    local_runtime_raw = os.environ.get("MFDAPPS_LOCAL_RUNTIME_ROOT", "/tmp/mfdapps-runtime").strip()
+    default_local_runtime = (
+        "/tmp/mfdapps-runtime"
+        if persistent_runtime_root == Path("/runtime")
+        else str(persistent_runtime_root)
+    )
+    local_runtime_raw = os.environ.get("MFDAPPS_LOCAL_RUNTIME_ROOT", default_local_runtime).strip()
     local_runtime_root = Path(local_runtime_raw).expanduser().resolve()
     local_runtime_root.mkdir(parents=True, exist_ok=True)
     sqlite_dir = local_runtime_root / "sqlite"
@@ -278,6 +343,23 @@ def _ensure_backend(spec: dict[str, str | int]) -> None:
         except Exception:
             pass
     sqlite_path.touch(exist_ok=True)
+
+    if _is_tcp_reachable(backend_host, backend_port):
+        running_db_path = _probe_backend_sqlite_path(spec)
+        expected = str(sqlite_path.resolve())
+        if running_db_path:
+            try:
+                if str(Path(running_db_path).resolve()) == expected:
+                    return
+            except Exception:
+                if running_db_path == expected:
+                    return
+        if backend_host in {"127.0.0.1", "localhost"}:
+            _terminate_listener_on_port(backend_port)
+            if _is_tcp_reachable(backend_host, backend_port):
+                return
+        else:
+            return
 
     env = os.environ.copy()
     env["MFDAPPS_ENFORCE_ONEDRIVE"] = "0"
