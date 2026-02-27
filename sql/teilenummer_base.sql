@@ -14,7 +14,7 @@ select
   d.HISN as "W_SERN",
   d.HIIT as "W_ITNO",
   w.STAT as "W_STAT",
-  d.RGDT as "RGDT",
+  d.INDA as "RGDT",
   d.RGTM as "RGTM"
 from MILOIN a
 left outer join MITLOC b
